@@ -2,7 +2,7 @@
 """
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
 - Single Unified Group Chat Game Session: Anyone in group chat can play, answer, or view the active game.
-- Real-Time Telemetry Logging: Ships user actions, choices, and locations to Telegram log channel/Admin.
+- Non-Blocking Background Telemetry Logging: Ships user choices and locations instantly without slowing button clicks.
 - Credit Branding: "Made by @erawat_69" on final guess & game end screens.
 """
 
@@ -117,7 +117,7 @@ class FastAkinator:
                 if isinstance(res, dict) and res.get("completion") == "OK":
                     break
             except Exception:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
         if isinstance(res, dict) and res.get("completion") == "OK":
             if res.get("id_proposition") or res.get("name_proposition"):
@@ -242,22 +242,23 @@ async def get_chat_title(event):
         pass
     return "Private DM" if event.is_private else f"Group {event.chat_id}"
 
-async def log_telemetry(client, user_name, user_id, chat_title, chat_id, action_str, extra=""):
-    log_msg = (
-        f"📊 **[EraAki Telemetry]**\n"
-        f"👤 **User:** [{user_name}](tg://user?id={user_id}) (`{user_id}`)\n"
-        f"📍 **Location:** `{chat_title}` (`{chat_id}`)\n"
-        f"🎯 **Action:** {action_str}"
-    )
-    if extra:
-        log_msg += f"\nℹ️ **Detail:** {extra}"
+def log_telemetry(client, user_name, user_id, chat_title, chat_id, action_str, extra=""):
+    asyncio.create_task(_ship_telemetry(client, user_name, user_id, chat_title, chat_id, action_str, extra))
 
+async def _ship_telemetry(client, user_name, user_id, chat_title, chat_id, action_str, extra=""):
     logging.info(f"TELEMETRY: User={user_name} ({user_id}) | Location={chat_title} ({chat_id}) | Action={action_str} | Detail={extra}")
-
     try:
+        log_msg = (
+            f"📊 **[EraAki Telemetry]**\n"
+            f"👤 **User:** [{user_name}](tg://user?id={user_id}) (`{user_id}`)\n"
+            f"📍 **Location:** `{chat_title}` (`{chat_id}`)\n"
+            f"🎯 **Action:** {action_str}"
+        )
+        if extra:
+            log_msg += f"\nℹ️ **Detail:** {extra}"
         await client.send_message(LOG_ADMIN_ID, log_msg, parse_mode="Markdown")
     except Exception as e:
-        logging.error(f"Failed shipping telemetry to Telegram: {e}")
+        logging.error(f"Telemetry log notice: {e}")
 
 async def start_web_server():
     port = int(os.getenv("PORT", "8080"))
@@ -342,7 +343,7 @@ async def main():
             last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
             text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{aki.question}"
             await event.reply(text, parse_mode="Markdown", buttons=reply_buttons)
-            await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🎮 Checked Active Game", f"Step {aki.step} ({int(aki.progression)}%)")
+            log_telemetry(client, user_name, user_id, chat_title, chat_id, "🎮 Checked Active Game", f"Step {aki.step} ({int(aki.progression)}%)")
             return
 
         msg = await event.reply(f"🔮 *Starting Akinator game for* {user_mention}...", parse_mode="Markdown")
@@ -359,7 +360,7 @@ async def main():
             }
             text = f"👤 *Player:* {user_mention}\n❓ *Question 1:*\n{q}"
             await msg.edit(text, parse_mode="Markdown", buttons=reply_buttons)
-            await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🎮 Started New Game", f"Q1: {q}")
+            log_telemetry(client, user_name, user_id, chat_title, chat_id, "🎮 Started New Game", f"Q1: {q}")
         except Exception as e:
             logging.error(f"Error starting game: {e}")
             await msg.edit(f"❌ Failed to start Akinator: {e}")
@@ -379,7 +380,7 @@ async def main():
             await game["aki"].close()
             del games[game_key]
             await event.reply(f"🛑 Game stopped by {user_mention}!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
-            await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🛑 Stopped Active Game")
+            log_telemetry(client, user_name, user_id, chat_title, chat_id, "🛑 Stopped Active Game")
             return
 
         # 2. Otherwise notify sender
@@ -415,7 +416,7 @@ async def main():
                 await event.edit(f"🛑 Game ended by {user_mention}. Type /eraaki to start again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
             except MessageNotModifiedError:
                 pass
-            await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🛑 Ended Game via Button")
+            log_telemetry(client, user_name, user_id, chat_title, chat_id, "🛑 Ended Game via Button")
             return
 
         await event.answer()
@@ -444,7 +445,7 @@ async def main():
 
                 text = f"👤 *Player:* {game['owner_mention']}\n🎉 *I think of:*\n\n🌟 **{name}**\n_{desc}_\n\n{CREDIT_TEXT}"
 
-                await log_telemetry(client, user_name, user_id, chat_title, chat_id, f"🎉 Character Guess Made", f"Guess: {name} ({desc})")
+                log_telemetry(client, user_name, user_id, chat_title, chat_id, f"🎉 Character Guess Made", f"Guess: {name} ({desc})")
 
                 if photo:
                     try:
@@ -459,7 +460,7 @@ async def main():
                 last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
                 text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{q}"
                 await event.edit(text, parse_mode="Markdown", buttons=reply_buttons)
-                await log_telemetry(client, user_name, user_id, chat_title, chat_id, f"Answered {action_text}", f"Next: Q{aki.step} ({int(aki.progression)}%) - {q}")
+                log_telemetry(client, user_name, user_id, chat_title, chat_id, f"Answered {action_text}", f"Next: Q{aki.step} ({int(aki.progression)}%) - {q}")
 
         except MessageNotModifiedError:
             pass
@@ -494,14 +495,14 @@ async def main():
             del games[game_key]
             await event.answer("Hooray! 🎉")
             await event.respond(f"🏆 *I guessed it right for {user_mention}!* Thanks for playing! Send /eraaki to play again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
-            await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🏆 Correct Guess Confirmed")
+            log_telemetry(client, user_name, user_id, chat_title, chat_id, "🏆 Correct Guess Confirmed")
         else:
             aki = game["aki"]
             try:
                 q = await aki.answer("n")
                 text = f"👤 *Player:* {user_mention}\n🔄 Continuing game!\n❓ *Question {aki.step}:*\n{q}"
                 await event.respond(text, parse_mode="Markdown", buttons=reply_buttons)
-                await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🔄 Rejected Guess, Continuing", f"Q{aki.step}: {q}")
+                log_telemetry(client, user_name, user_id, chat_title, chat_id, "🔄 Rejected Guess, Continuing", f"Q{aki.step}: {q}")
             except Exception:
                 await aki.close()
                 del games[game_key]
