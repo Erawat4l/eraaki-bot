@@ -1,0 +1,13 @@
+services:
+  - type: worker
+    name: eraaki-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_API_ID
+        value: "30909654"
+      - key: TELEGRAM_API_HASH
+        value: "d4b340a406c5c1ed1d7f26d44749602b"
