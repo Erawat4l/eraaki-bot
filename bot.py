@@ -37,7 +37,7 @@ ANSWER_LABELS = {
     "b": "⬅️ Back"
 }
 
-CREDIT_TEXT = "Made by @Erawat4l"
+CREDIT_TEXT = "Made by @erawat_69"
 
 class FastAkinator:
     def __init__(self, lang="en"):
@@ -171,25 +171,56 @@ class FastAkinator:
         except Exception:
             pass
 
-def get_game_buttons():
+def get_game_buttons(owner_id):
     return [
-        [Button.inline("✅ Yes", b"aki_y"), Button.inline("❌ No", b"aki_n")],
-        [Button.inline("❓ Don't Know", b"aki_i")],
-        [Button.inline("👍 Probably", b"aki_p"), Button.inline("👎 Probably Not", b"aki_pn")],
-        [Button.inline("⬅️ Back", b"aki_b"), Button.inline("🛑 End Game", b"aki_end")]
+        [Button.inline("✅ Yes", f"aki_y_{owner_id}".encode()), Button.inline("❌ No", f"aki_n_{owner_id}".encode())],
+        [Button.inline("❓ Don't Know", f"aki_i_{owner_id}".encode())],
+        [Button.inline("👍 Probably", f"aki_p_{owner_id}".encode()), Button.inline("👎 Probably Not", f"aki_pn_{owner_id}".encode())],
+        [Button.inline("⬅️ Back", f"aki_b_{owner_id}".encode()), Button.inline("🛑 End Game", f"aki_end_{owner_id}".encode())]
     ]
 
-def get_guess_buttons():
+def get_guess_buttons(owner_id):
     return [
-        [Button.inline("🎉 Yes! That's right!", b"guess_yes")],
-        [Button.inline("🔄 No, keep guessing!", b"guess_no")]
+        [Button.inline("🎉 Yes! That's right!", f"guess_yes_{owner_id}".encode())],
+        [Button.inline("🔄 No, keep guessing!", f"guess_no_{owner_id}".encode())]
     ]
+
+async def get_player_info(client, event, owner_id):
+    sender = await event.get_sender()
+    name = ""
+    if sender:
+        if getattr(sender, 'first_name', None):
+            name = sender.first_name
+            if getattr(sender, 'last_name', None):
+                name += f" {sender.last_name}"
+        elif getattr(sender, 'username', None):
+            name = f"@{sender.username}"
+        elif getattr(sender, 'title', None):
+            name = sender.title
+
+    if not name or name == "Player":
+        try:
+            ent = await client.get_entity(owner_id)
+            if getattr(ent, 'first_name', None):
+                name = ent.first_name
+                if getattr(ent, 'last_name', None):
+                    name += f" {ent.last_name}"
+            elif getattr(ent, 'username', None):
+                name = f"@{ent.username}"
+        except Exception:
+            pass
+
+    if not name:
+        name = f"User {owner_id}"
+
+    mention = f"[{name}](tg://user?id={owner_id})"
+    return name, mention
 
 async def start_web_server():
     port = int(os.getenv("PORT", "8080"))
     app = web.Application()
     async def health(req):
-        return web.Response(text="Akinator Bot Online 24/7! Made by Erawat")
+        return web.Response(text="Akinator Bot Online 24/7! Made by @erawat_69")
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     runner = web.AppRunner(app)
@@ -240,8 +271,8 @@ async def main():
             ]
         ))
         await client(SetBotInfoRequest(
-            about="Official Akinator Telegram Bot made by Erawat. Play Akinator in group chats and DMs!",
-            description="Official Akinator Telegram Bot made by Erawat. Play Akinator in group chats and DMs!",
+            about="Official Akinator Telegram Bot made by @erawat_69. Play Akinator in group chats and DMs!",
+            description="Official Akinator Telegram Bot made by @erawat_69. Play Akinator in group chats and DMs!",
             lang_code="en"
         ))
         print("✓ Registered bot description & command autocomplete menu.")
@@ -253,18 +284,18 @@ async def main():
     @client.on(events.NewMessage(pattern=r"(?i)^/eraaki(@\w+)?"))
     async def start_handler(event):
         chat_id = event.chat_id
-        sender = await event.get_sender()
         owner_id = event.sender_id
-        owner_name = (sender.first_name if (sender and sender.first_name) else "Player")
-        owner_mention = f"[{owner_name}](tg://user?id={owner_id})"
+        key = (chat_id, owner_id)
 
-        # If a game is active, display the current active question directly with its buttons!
-        if chat_id in games:
-            game = games[chat_id]
+        owner_name, owner_mention = await get_player_info(client, event, owner_id)
+
+        # If this specific player already has an active game, display their active question directly!
+        if key in games:
+            game = games[key]
             aki = game["aki"]
             last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
             text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{aki.question}\n\n{CREDIT_TEXT}"
-            await event.reply(text, parse_mode="Markdown", buttons=get_game_buttons())
+            await event.reply(text, parse_mode="Markdown", buttons=get_game_buttons(owner_id))
             return
 
         msg = await event.reply(f"🔮 *Starting Akinator game for* {owner_mention}...\n\n{CREDIT_TEXT}", parse_mode="Markdown")
@@ -272,7 +303,7 @@ async def main():
         aki = FastAkinator()
         try:
             q = await aki.start_game()
-            games[chat_id] = {
+            games[key] = {
                 "aki": aki,
                 "owner_id": owner_id,
                 "owner_name": owner_name,
@@ -280,7 +311,7 @@ async def main():
                 "last_ans": None
             }
             text = f"👤 *Player:* {owner_mention}\n❓ *Question 1:*\n{q}\n\n{CREDIT_TEXT}"
-            await msg.edit(text, parse_mode="Markdown", buttons=get_game_buttons())
+            await msg.edit(text, parse_mode="Markdown", buttons=get_game_buttons(owner_id))
         except Exception as e:
             logging.error(f"Error starting game: {e}")
             await msg.edit(f"❌ Failed to start Akinator: {e}")
@@ -288,38 +319,44 @@ async def main():
     @client.on(events.NewMessage(pattern=r"(?i)^/(stop|end|eraakistop)(@\w+)?"))
     async def stop_handler(event):
         chat_id = event.chat_id
-        if chat_id in games:
-            game = games[chat_id]
-            if event.sender_id != game["owner_id"]:
-                await event.reply(f"⚠️ Only {game['owner_name']} who started the game can stop it!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
-                return
+        owner_id = event.sender_id
+        key = (chat_id, owner_id)
 
+        if key in games:
+            game = games[key]
             await game["aki"].close()
-            del games[chat_id]
+            del games[key]
             await event.reply(f"🛑 Game stopped by {game['owner_mention']}!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
         else:
-            await event.reply(f"No game active. Type /eraaki to start one!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+            other_game = next((g for (c, u), g in games.items() if c == chat_id), None)
+            if other_game:
+                await event.reply(f"⚠️ You don't have an active game running. {other_game['owner_mention']}'s game is currently running!\nSend /eraaki to start your own game.\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+            else:
+                await event.reply(f"No active game for you. Type /eraaki to start one!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
 
     @client.on(events.CallbackQuery(pattern=rb"^aki_"))
     async def callback_handler(event):
         chat_id = event.chat_id
-        action = event.data.decode().split("_")[1]
+        parts = event.data.decode().split("_")
+        action = parts[1]
+        target_owner_id = int(parts[2]) if len(parts) > 2 else event.sender_id
+        key = (chat_id, target_owner_id)
 
-        if chat_id not in games:
-            await event.answer("No active game in this chat. Type /eraaki!", alert=True)
+        if event.sender_id != target_owner_id:
+            target_name = games[key]["owner_name"] if key in games else "the player"
+            await event.answer(f"⚠️ Only {target_name} can answer this game!\nSend /eraaki to start your own game.", alert=True)
             return
 
-        game = games[chat_id]
-
-        if event.sender_id != game["owner_id"]:
-            await event.answer(f"⚠️ Only {game['owner_name']} can answer this game!\nSend /eraaki to start your own game.", alert=True)
+        if key not in games:
+            await event.answer("Game expired or ended. Type /eraaki!", alert=True)
             return
 
+        game = games[key]
         aki = game["aki"]
 
         if action == "end":
             await aki.close()
-            del games[chat_id]
+            del games[key]
             await event.answer("Game ended.")
             try:
                 await event.edit(f"🛑 Game ended by {game['owner_mention']}. Type /eraaki to start again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
@@ -348,16 +385,16 @@ async def main():
                 if photo:
                     try:
                         await event.delete()
-                        await client.send_file(chat_id, photo, caption=text, parse_mode="Markdown", buttons=get_guess_buttons())
+                        await client.send_file(chat_id, photo, caption=text, parse_mode="Markdown", buttons=get_guess_buttons(target_owner_id))
                         return
                     except Exception:
                         pass
 
-                await event.edit(text, parse_mode="Markdown", buttons=get_guess_buttons())
+                await event.edit(text, parse_mode="Markdown", buttons=get_guess_buttons(target_owner_id))
             else:
                 last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
                 text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{q}\n\n{CREDIT_TEXT}"
-                await event.edit(text, parse_mode="Markdown", buttons=get_game_buttons())
+                await event.edit(text, parse_mode="Markdown", buttons=get_game_buttons(target_owner_id))
 
         except MessageNotModifiedError:
             pass
@@ -367,21 +404,25 @@ async def main():
     @client.on(events.CallbackQuery(pattern=rb"^guess_"))
     async def guess_handler(event):
         chat_id = event.chat_id
-        action = event.data.decode().split("_")[1]
+        parts = event.data.decode().split("_")
+        action = parts[1]
+        target_owner_id = int(parts[2]) if len(parts) > 2 else event.sender_id
+        key = (chat_id, target_owner_id)
 
-        if chat_id not in games:
-            await event.answer("No active game in this chat.", alert=True)
+        if event.sender_id != target_owner_id:
+            target_name = games[key]["owner_name"] if key in games else "the player"
+            await event.answer(f"⚠️ Only {target_name} can respond to this guess!\nSend /eraaki to start your own game.", alert=True)
             return
 
-        game = games[chat_id]
-
-        if event.sender_id != game["owner_id"]:
-            await event.answer(f"⚠️ Only {game['owner_name']} can respond to this guess!", alert=True)
+        if key not in games:
+            await event.answer("No active game.", alert=True)
             return
+
+        game = games[key]
 
         if action == "yes":
             await game["aki"].close()
-            del games[chat_id]
+            del games[key]
             await event.answer("Hooray! 🎉")
             await event.respond(f"🏆 *I guessed it right for {game['owner_mention']}!* Thanks for playing! Send /eraaki to play again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
         else:
@@ -389,10 +430,10 @@ async def main():
             try:
                 q = await aki.answer("n")
                 text = f"👤 *Player:* {game['owner_mention']}\n🔄 Continuing game!\n❓ *Question {aki.step}:*\n{q}\n\n{CREDIT_TEXT}"
-                await event.respond(text, parse_mode="Markdown", buttons=get_game_buttons())
+                await event.respond(text, parse_mode="Markdown", buttons=get_game_buttons(target_owner_id))
             except Exception:
                 await aki.close()
-                del games[chat_id]
+                del games[key]
                 await event.respond(f"Game ended. Type /eraaki to start again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
 
     await client.run_until_disconnected()
