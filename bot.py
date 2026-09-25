@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
+- Immediate Web Server Boot: Starts HTTP health check server instantly on container boot so Render deploys always succeed.
 - Robust Entity Resolution: Guarantees full names and mentions for all group chat players (e.g. QUARTZ, Kush).
 - Strict Token Validation: Validates session, identifiant, and initial question extraction so broken sessions are never created.
 - Non-Blocking Background Telemetry Logging: Ships user choices and locations instantly without slowing button clicks.
@@ -334,6 +335,9 @@ async def start_web_server():
     print(f"✓ Health check web server active on port {port}")
 
 async def main():
+    # 1. Start web health check server FIRST so Render port scanner passes instantly!
+    asyncio.create_task(start_web_server())
+
     bot_token = os.getenv("BOT_TOKEN")
     if not bot_token and len(sys.argv) > 1:
         bot_token = sys.argv[1]
@@ -360,8 +364,6 @@ async def main():
 
     client = TelegramClient(str(session_path), api_id, api_hash)
     await client.start(bot_token=bot_token)
-
-    asyncio.create_task(start_web_server())
 
     try:
         await client(SetBotCommandsRequest(
