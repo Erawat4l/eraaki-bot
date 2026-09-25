@@ -43,7 +43,7 @@ class FastAkinator:
     def __init__(self, lang="en"):
         self.lang = lang
         self.session = AsyncSession(impersonate="chrome120")
-        self.step = 0
+        self.step = 1
         self.progression = 0.0
         self.question = ""
         self.win = False
@@ -52,6 +52,11 @@ class FastAkinator:
         self.identifiant = ""
 
     async def start_game(self):
+        try:
+            await self.session.get(f"https://{self.lang}.akinator.com/")
+        except Exception:
+            pass
+
         url = f"https://{self.lang}.akinator.com/game"
         r = await self.session.post(url, data={"sid": "1", "cm": "false"})
         text = r.text
@@ -71,7 +76,7 @@ class FastAkinator:
         else:
             self.question = "Is your character real?"
 
-        self.step = 0
+        self.step = 1
         self.progression = 0.0
         self.win = False
         return self.question
@@ -87,13 +92,14 @@ class FastAkinator:
             "cm": "false",
             "answer": str(ans_id),
             "step_last_proposition": "",
-            "session": self.aki_session,
-            "identifiant": self.identifiant
+            "session": self.aki_session
         }
 
         headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"https://{self.lang}.akinator.com/game"
+            "Referer": f"https://{self.lang}.akinator.com/game",
+            "Origin": f"https://{self.lang}.akinator.com"
         }
 
         r = await self.session.post(f"https://{self.lang}.akinator.com/answer", data=payload, headers=headers)
@@ -105,7 +111,7 @@ class FastAkinator:
             self.progression += 5.0
             return self.question
 
-        if isinstance(res, dict):
+        if isinstance(res, dict) and res.get("completion") == "OK":
             if "id_proposition" in res:
                 self.win = True
                 self.first_guess = {
@@ -122,7 +128,7 @@ class FastAkinator:
         return self.question
 
     async def back(self):
-        if self.step <= 0:
+        if self.step <= 1:
             return self.question
 
         payload = {
@@ -134,19 +140,21 @@ class FastAkinator:
         }
 
         headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
             "X-Requested-With": "XMLHttpRequest",
-            "Referer": f"https://{self.lang}.akinator.com/game"
+            "Referer": f"https://{self.lang}.akinator.com/game",
+            "Origin": f"https://{self.lang}.akinator.com"
         }
 
         r = await self.session.post(f"https://{self.lang}.akinator.com/cancel_answer", data=payload, headers=headers)
         try:
             res = r.json()
             if isinstance(res, dict) and res.get("question"):
-                self.step = int(res.get("step", max(0, self.step - 1)))
+                self.step = int(res.get("step", max(1, self.step - 1)))
                 self.progression = float(res.get("progression", self.progression))
                 self.question = html.unescape(res.get("question"))
         except Exception:
-            self.step = max(0, self.step - 1)
+            self.step = max(1, self.step - 1)
 
         return self.question
 
@@ -243,16 +251,15 @@ async def main():
         chat_id = event.chat_id
         sender = await event.get_sender()
         owner_id = event.sender_id
-        owner_name = sender.first_name if sender else "Game Host"
+        owner_name = (sender.first_name if (sender and sender.first_name) else "Player")
         owner_mention = f"[{owner_name}](tg://user?id={owner_id})"
 
         # If a game is active, display the current active question directly with its buttons!
         if chat_id in games:
             game = games[chat_id]
             aki = game["aki"]
-            step_num = aki.step + 1
             last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
-            text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {step_num}:* (Progress: {int(aki.progression)}%)\n{aki.question}\n\n{CREDIT_TEXT}"
+            text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{aki.question}\n\n{CREDIT_TEXT}"
             await event.reply(text, parse_mode="Markdown", buttons=get_game_buttons())
             return
 
@@ -280,7 +287,7 @@ async def main():
         if chat_id in games:
             game = games[chat_id]
             if event.sender_id != game["owner_id"]:
-                await event.reply(f"⚠️ Only {game['owner_mention']} who started the game can stop it!")
+                await event.reply(f"⚠️ Only {game['owner_name']} who started the game can stop it!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
                 return
 
             await game["aki"].close()
@@ -344,9 +351,8 @@ async def main():
 
                 await event.edit(text, parse_mode="Markdown", buttons=get_guess_buttons())
             else:
-                step_num = aki.step + 1
                 last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
-                text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {step_num}:* (Progress: {int(aki.progression)}%)\n{q}\n\n{CREDIT_TEXT}"
+                text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{q}\n\n{CREDIT_TEXT}"
                 await event.edit(text, parse_mode="Markdown", buttons=get_game_buttons())
 
         except MessageNotModifiedError:
@@ -378,8 +384,7 @@ async def main():
             aki = game["aki"]
             try:
                 q = await aki.answer("n")
-                step_num = aki.step + 1
-                text = f"👤 *Player:* {game['owner_mention']}\n🔄 Continuing game!\n❓ *Question {step_num}:*\n{q}\n\n{CREDIT_TEXT}"
+                text = f"👤 *Player:* {game['owner_mention']}\n🔄 Continuing game!\n❓ *Question {aki.step}:*\n{q}\n\n{CREDIT_TEXT}"
                 await event.respond(text, parse_mode="Markdown", buttons=get_game_buttons())
             except Exception:
                 await aki.close()
