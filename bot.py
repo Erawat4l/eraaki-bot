@@ -298,11 +298,11 @@ async def main():
             game = games[key]
             aki = game["aki"]
             last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
-            text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{aki.question}\n\n{CREDIT_TEXT}"
+            text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{aki.question}"
             await event.reply(text, parse_mode="Markdown", buttons=get_game_buttons(owner_id))
             return
 
-        msg = await event.reply(f"🔮 *Starting Akinator game for* {owner_mention}...\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+        msg = await event.reply(f"🔮 *Starting Akinator game for* {owner_mention}...", parse_mode="Markdown")
         
         aki = FastAkinator()
         try:
@@ -314,7 +314,7 @@ async def main():
                 "owner_mention": owner_mention,
                 "last_ans": None
             }
-            text = f"👤 *Player:* {owner_mention}\n❓ *Question 1:*\n{q}\n\n{CREDIT_TEXT}"
+            text = f"👤 *Player:* {owner_mention}\n❓ *Question 1:*\n{q}"
             await msg.edit(text, parse_mode="Markdown", buttons=get_game_buttons(owner_id))
         except Exception as e:
             logging.error(f"Error starting game: {e}")
@@ -334,9 +334,9 @@ async def main():
         else:
             other_game = next((g for (c, u), g in games.items() if c == chat_id), None)
             if other_game:
-                await event.reply(f"⚠️ You don't have an active game running. {other_game['owner_mention']}'s game is currently running!\nSend /eraaki to start your own game.\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+                await event.reply(f"⚠️ You don't have an active game running. {other_game['owner_mention']}'s game is currently running!\nSend /eraaki to start your own game.", parse_mode="Markdown")
             else:
-                await event.reply(f"No active game for you. Type /eraaki to start one!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+                await event.reply(f"No active game for you. Type /eraaki to start one!", parse_mode="Markdown")
 
     @client.on(events.CallbackQuery(pattern=rb"^aki_"))
     async def callback_handler(event):
@@ -397,7 +397,7 @@ async def main():
                 await event.edit(text, parse_mode="Markdown", buttons=get_guess_buttons(target_owner_id))
             else:
                 last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
-                text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{q}\n\n{CREDIT_TEXT}"
+                text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{q}"
                 await event.edit(text, parse_mode="Markdown", buttons=get_game_buttons(target_owner_id))
 
         except MessageNotModifiedError:
