@@ -37,7 +37,7 @@ ANSWER_LABELS = {
     "b": "⬅️ Back"
 }
 
-CREDIT_TEXT = "Made by Erawat"
+CREDIT_TEXT = "Made by @Erawat4l"
 
 class FastAkinator:
     def __init__(self, lang="en"):
@@ -62,10 +62,14 @@ class FastAkinator:
         text = r.text
 
         sess_m = re.search(r"localStorage\.setItem\('session',\s*'([^']+)'\)", text)
-        id_m = re.search(r"localStorage\.setItem\('identifiant',\s*'([^']+)'\)", text)
-
+        if not sess_m:
+            sess_m = re.search(r"session\s*:\s*'([^']+)'", text)
         if not sess_m:
             sess_m = re.search(r'id="session"\s+value="([^"]+)"', text)
+
+        id_m = re.search(r"localStorage\.setItem\('identifiant',\s*'([^']+)'\)", text)
+        if not id_m:
+            id_m = re.search(r"identifiant\s*:\s*'([^']+)'", text)
 
         self.aki_session = sess_m.group(1) if sess_m else ""
         self.identifiant = id_m.group(1) if id_m else ""
@@ -108,7 +112,7 @@ class FastAkinator:
             res = r.json()
         except Exception:
             self.step += 1
-            self.progression += 5.0
+            self.progression = min(99.0, self.progression + 5.0)
             return self.question
 
         if isinstance(res, dict) and res.get("completion") == "OK":
@@ -124,6 +128,9 @@ class FastAkinator:
                 self.progression = float(res.get("progression", self.progression))
                 if res.get("question"):
                     self.question = html.unescape(res.get("question"))
+        else:
+            self.step += 1
+            self.progression = min(99.0, self.progression + 5.0)
 
         return self.question
 
