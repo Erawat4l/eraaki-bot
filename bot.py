@@ -92,7 +92,7 @@ class FastAkinator:
                     parsed_id = id_m.group(1).strip()
                     parsed_q = html.unescape(q_m.group(1).strip())
 
-                    if parsed_sess and parsed_id and parsed_q and parsed_q != "Is your character real?":
+                    if parsed_sess and parsed_id and parsed_q:
                         self.aki_session = parsed_sess
                         self.identifiant = parsed_id
                         self.question = parsed_q

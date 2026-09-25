@@ -1,0 +1,8 @@
+__pycache__/
+*.session
+*.session-journal
+*.log
+node_modules/
+app-v3.js
+package.json
+package-lock.json
