@@ -2,8 +2,9 @@
 """
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
 - Host-Locked Gameplay: Only the user who initiated /eraaki can click the buttons in group chats.
-- Public Visibility: Displays the player's name and last selected answer to the entire group.
-- Web Health Check: Runs a lightweight HTTP server on $PORT for Render Free Web Service ($0/mo).
+- Public Visibility: Displays player's name and last selected answer to the entire group.
+- Credit Branding: Includes "Made with ❤️ by Erawat" credit on start & game messages.
+- Web Health Check: Lightweight HTTP server for Render Free Web Service ($0/mo).
 """
 
 import os
@@ -32,6 +33,8 @@ ANSWER_LABELS = {
     "pn": "👎 Probably Not",
     "b": "⬅️ Back"
 }
+
+CREDIT_TEXT = "👑 *Made by Erawat*"
 
 class FastAkinator:
     def __init__(self, lang="en"):
@@ -168,7 +171,7 @@ async def start_web_server():
     port = int(os.getenv("PORT", "8080"))
     app = web.Application()
     async def health(req):
-        return web.Response(text="Akinator Bot Online 24/7!")
+        return web.Response(text="Akinator Bot Online 24/7! Made by Erawat")
     app.router.add_get("/", health)
     app.router.add_get("/health", health)
     runner = web.AppRunner(app)
@@ -236,10 +239,10 @@ async def main():
 
         if chat_id in games:
             existing_game = games[chat_id]
-            await event.reply(f"🎮 A game initiated by {existing_game['owner_mention']} is already active in this chat! Choose an answer or type /stop to end it.", buttons=get_game_buttons())
+            await event.reply(f"🎮 A game initiated by {existing_game['owner_mention']} is already active in this chat!\n{CREDIT_TEXT}", buttons=get_game_buttons())
             return
 
-        msg = await event.reply(f"🔮 *Starting Akinator game for* {owner_mention}...")
+        msg = await event.reply(f"🔮 *Starting Akinator game for* {owner_mention}...\n\n{CREDIT_TEXT}", parse_mode="Markdown")
         
         aki = FastAkinator()
         try:
@@ -251,7 +254,7 @@ async def main():
                 "owner_mention": owner_mention,
                 "last_ans": None
             }
-            text = f"👤 *Player:* {owner_mention}\n❓ *Question 1:*\n{q}"
+            text = f"👤 *Player:* {owner_mention}\n❓ *Question 1:*\n{q}\n\n{CREDIT_TEXT}"
             await msg.edit(text, parse_mode="Markdown", buttons=get_game_buttons())
         except Exception as e:
             logging.error(f"Error starting game: {e}")
@@ -268,9 +271,9 @@ async def main():
 
             await game["aki"].close()
             del games[chat_id]
-            await event.reply(f"🛑 Game stopped by {game['owner_mention']}! Type /eraaki to start a new game.")
+            await event.reply(f"🛑 Game stopped by {game['owner_mention']}!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
         else:
-            await event.reply("No game active. Type /eraaki to start one!")
+            await event.reply(f"No game active. Type /eraaki to start one!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
 
     @client.on(events.CallbackQuery(pattern=rb"^aki_"))
     async def callback_handler(event):
@@ -294,7 +297,7 @@ async def main():
             del games[chat_id]
             await event.answer("Game ended.")
             try:
-                await event.edit(f"🛑 Game ended by {game['owner_mention']}. Type /eraaki to start again!", parse_mode="Markdown")
+                await event.edit(f"🛑 Game ended by {game['owner_mention']}. Type /eraaki to start again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
             except MessageNotModifiedError:
                 pass
             return
@@ -315,7 +318,7 @@ async def main():
                 desc = guess.get("description", "")
                 photo = guess.get("photo", "")
 
-                text = f"👤 *Player:* {game['owner_mention']}\n🎉 *I think of:*\n\n🌟 **{name}**\n_{desc}_"
+                text = f"👤 *Player:* {game['owner_mention']}\n🎉 *I think of:*\n\n🌟 **{name}**\n_{desc}_\n\n{CREDIT_TEXT}"
 
                 if photo:
                     try:
@@ -329,7 +332,7 @@ async def main():
             else:
                 step_num = aki.step + 1
                 last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
-                text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {step_num}:* (Progress: {int(aki.progression)}%)\n{q}"
+                text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {step_num}:* (Progress: {int(aki.progression)}%)\n{q}\n\n{CREDIT_TEXT}"
                 await event.edit(text, parse_mode="Markdown", buttons=get_game_buttons())
 
         except MessageNotModifiedError:
@@ -356,18 +359,18 @@ async def main():
             await game["aki"].close()
             del games[chat_id]
             await event.answer("Hooray! 🎉")
-            await event.respond(f"🏆 *I guessed it right for {game['owner_mention']}!* Thanks for playing! Send /eraaki to play again!", parse_mode="Markdown")
+            await event.respond(f"🏆 *I guessed it right for {game['owner_mention']}!* Thanks for playing! Send /eraaki to play again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
         else:
             aki = game["aki"]
             try:
                 q = await aki.answer("n")
                 step_num = aki.step + 1
-                text = f"👤 *Player:* {game['owner_mention']}\n🔄 Continuing game!\n❓ *Question {step_num}:*\n{q}"
+                text = f"👤 *Player:* {game['owner_mention']}\n🔄 Continuing game!\n❓ *Question {step_num}:*\n{q}\n\n{CREDIT_TEXT}"
                 await event.respond(text, parse_mode="Markdown", buttons=get_game_buttons())
             except Exception:
                 await aki.close()
                 del games[chat_id]
-                await event.respond(f"Game ended. Type /eraaki to start again!", parse_mode="Markdown")
+                await event.respond(f"Game ended. Type /eraaki to start again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
 
     await client.run_until_disconnected()
 
