@@ -239,7 +239,11 @@ async def main():
 
         if chat_id in games:
             existing_game = games[chat_id]
-            await event.reply(f"🎮 A game initiated by {existing_game['owner_mention']} is already active in this chat!\n{CREDIT_TEXT}", buttons=get_game_buttons())
+            restart_buttons = [
+                [Button.inline("🔄 Restart New Game", b"aki_force_restart")],
+                [Button.inline("🛑 Stop Game", b"aki_end")]
+            ]
+            await event.reply(f"🎮 A game initiated by {existing_game['owner_mention']} is already active in this chat!\nClick **Restart New Game** or /stop to start fresh.\n\n{CREDIT_TEXT}", parse_mode="Markdown", buttons=restart_buttons)
             return
 
         msg = await event.reply(f"🔮 *Starting Akinator game for* {owner_mention}...\n\n{CREDIT_TEXT}", parse_mode="Markdown")
@@ -279,6 +283,35 @@ async def main():
     async def callback_handler(event):
         chat_id = event.chat_id
         action = event.data.decode().split("_")[1]
+
+        if action == "force":
+            if chat_id in games:
+                await games[chat_id]["aki"].close()
+                del games[chat_id]
+
+            sender = await event.get_sender()
+            owner_id = event.sender_id
+            owner_name = sender.first_name if sender else "Game Host"
+            owner_mention = f"[{owner_name}](tg://user?id={owner_id})"
+
+            await event.answer("Restarting new game...")
+            msg = await event.edit(f"🔮 *Starting new Akinator game for* {owner_mention}...\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+
+            aki = FastAkinator()
+            try:
+                q = await aki.start_game()
+                games[chat_id] = {
+                    "aki": aki,
+                    "owner_id": owner_id,
+                    "owner_name": owner_name,
+                    "owner_mention": owner_mention,
+                    "last_ans": None
+                }
+                text = f"👤 *Player:* {owner_mention}\n❓ *Question 1:*\n{q}\n\n{CREDIT_TEXT}"
+                await msg.edit(text, parse_mode="Markdown", buttons=get_game_buttons())
+            except Exception as e:
+                await msg.edit(f"❌ Failed to start Akinator: {e}")
+            return
 
         if chat_id not in games:
             await event.answer("No active game in this chat. Type /eraaki!", alert=True)
