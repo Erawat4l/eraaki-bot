@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
-- Robust Entity Resolution: Guarantees full names and mentions for all group chat players (e.g. Kush).
+- Robust Entity Resolution: Guarantees full names and mentions for all group chat players (e.g. QUARTZ, Kush).
+- Session & Cookie Synchronization: Enforces homepage GET cookie clearance before game POST to guarantee valid tokens.
 - Non-Blocking Background Telemetry Logging: Ships user choices and locations instantly without slowing button clicks.
-- Session Preservation: Prevents game state resets on temporary network hiccups.
 - Credit Branding: "Made by @erawat_69" on final guess & game end screens.
 """
 
@@ -55,37 +55,39 @@ class FastAkinator:
 
     async def start_game(self):
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
             "Referer": f"https://{self.lang}.akinator.com/",
             "Origin": f"https://{self.lang}.akinator.com"
         }
-        try:
-            await self.session.get(f"https://{self.lang}.akinator.com/", headers=headers, timeout=10)
-        except Exception:
-            pass
 
-        url = f"https://{self.lang}.akinator.com/game"
-        r = await self.session.post(url, data={"sid": "1", "cm": "false"}, headers=headers, timeout=10)
-        text = r.text
+        for attempt in range(3):
+            try:
+                # 1. Obtain fresh cookies from homepage
+                await self.session.get(f"https://{self.lang}.akinator.com/", headers=headers, timeout=10)
 
-        sess_m = re.search(r"localStorage\.setItem\('session',\s*'([^']+)'\)", text)
-        if not sess_m:
-            sess_m = re.search(r"session\s*:\s*'([^']+)'", text)
-        if not sess_m:
-            sess_m = re.search(r'id="session"\s+value="([^"]+)"', text)
+                # 2. Initialize game session
+                url = f"https://{self.lang}.akinator.com/game"
+                r = await self.session.post(url, data={"sid": "1", "cm": "false"}, headers=headers, timeout=10)
+                text = r.text
 
-        id_m = re.search(r"localStorage\.setItem\('identifiant',\s*'([^']+)'\)", text)
-        if not id_m:
-            id_m = re.search(r"identifiant\s*:\s*'([^']+)'", text)
+                sess_m = re.search(r"localStorage\.setItem\('session',\s*'([^']+)'\)", text) or re.search(r"session\s*:\s*'([^']+)'", text) or re.search(r'id="session"\s+value="([^"]+)"', text)
+                id_m = re.search(r"localStorage\.setItem\('identifiant',\s*'([^']+)'\)", text) or re.search(r"identifiant\s*:\s*'([^']+)'", text)
 
-        self.aki_session = sess_m.group(1) if sess_m else ""
-        self.identifiant = id_m.group(1) if id_m else ""
+                self.aki_session = sess_m.group(1) if sess_m else ""
+                self.identifiant = id_m.group(1) if id_m else ""
 
-        q_match = re.search(r'id="question-label">([^<]+)</p>', text)
-        if q_match:
-            self.question = html.unescape(q_match.group(1).strip())
-        else:
-            self.question = "Is your character real?"
+                if self.aki_session and self.identifiant:
+                    q_match = re.search(r'id="question-label">([^<]+)</p>', text)
+                    if q_match:
+                        self.question = html.unescape(q_match.group(1).strip())
+                    else:
+                        self.question = "Is your character real?"
+                    break
+            except Exception as e:
+                logging.error(f"start_game attempt {attempt+1} failed: {e}")
+                await asyncio.sleep(0.5)
 
         self.step = 1
         self.progression = 0.0
@@ -109,10 +111,11 @@ class FastAkinator:
         }
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "X-Requested-With": "XMLHttpRequest",
             "Referer": f"https://{self.lang}.akinator.com/game",
-            "Origin": f"https://{self.lang}.akinator.com"
+            "Origin": f"https://{self.lang}.akinator.com",
+            "Accept": "application/json, text/javascript, */*; q=0.01"
         }
 
         res = {}
@@ -145,7 +148,9 @@ class FastAkinator:
                 if res.get("question"):
                     self.question = html.unescape(res.get("question"))
         else:
-            logging.warning(f"Answer non-OK response: {res}. Retaining question state.")
+            # Re-sync session if completion KO
+            logging.warning(f"Answer KO: {res}. Re-syncing session.")
+            await self.start_game()
 
         return self.question
 
@@ -164,7 +169,7 @@ class FastAkinator:
         }
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "X-Requested-With": "XMLHttpRequest",
             "Referer": f"https://{self.lang}.akinator.com/game",
             "Origin": f"https://{self.lang}.akinator.com"
