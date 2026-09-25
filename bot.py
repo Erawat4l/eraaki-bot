@@ -278,7 +278,16 @@ async def main():
 
     print("⚡ Ultra-Fast Host-Locked Akinator Bot (@EraAki_Bot) started successfully!")
 
-    @client.on(events.NewMessage(pattern=r"(?i)^/eraaki(@\w+)?"))
+    ADMIN_IDS = {6714440636}
+
+    def get_private_promo_buttons():
+        return [
+            [Button.url("➕ Add Bot to Your Group", "https://t.me/EraAki_Bot?startgroup=true")],
+            [Button.url("📸 Instagram: @erawat_69", "https://instagram.com/erawat_69")],
+            [Button.url("💬 Owner Contact", "https://t.me/erawat_69")]
+        ]
+
+    @client.on(events.NewMessage(pattern=r"(?i)^/(eraaki|start)(@\w+)?$"))
     async def start_handler(event):
         chat_id = event.chat_id
         owner_id = event.sender_id
@@ -286,13 +295,17 @@ async def main():
 
         owner_name, owner_mention = await get_player_info(client, event, owner_id)
 
+        reply_buttons = get_game_buttons(owner_id)
+        if event.is_private:
+            reply_buttons = get_game_buttons(owner_id) + get_private_promo_buttons()
+
         # If this specific player already has an active game, display their active question directly!
         if key in games:
             game = games[key]
             aki = game["aki"]
             last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
             text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{aki.question}"
-            await event.reply(text, parse_mode="Markdown", buttons=get_game_buttons(owner_id))
+            await event.reply(text, parse_mode="Markdown", buttons=reply_buttons)
             return
 
         msg = await event.reply(f"🔮 *Starting Akinator game for* {owner_mention}...", parse_mode="Markdown")
@@ -308,28 +321,41 @@ async def main():
                 "last_ans": None
             }
             text = f"👤 *Player:* {owner_mention}\n❓ *Question 1:*\n{q}"
-            await msg.edit(text, parse_mode="Markdown", buttons=get_game_buttons(owner_id))
+            await msg.edit(text, parse_mode="Markdown", buttons=reply_buttons)
         except Exception as e:
             logging.error(f"Error starting game: {e}")
             await msg.edit(f"❌ Failed to start Akinator: {e}")
 
-    @client.on(events.NewMessage(pattern=r"(?i)^/(stop|end|eraakistop)(@\w+)?"))
+    @client.on(events.NewMessage(pattern=r"(?i)^/(stop|end|eraakistop)(@\w+)?$"))
     async def stop_handler(event):
         chat_id = event.chat_id
         owner_id = event.sender_id
         key = (chat_id, owner_id)
 
+        # 1. Stop sender's own game
         if key in games:
             game = games[key]
             await game["aki"].close()
             del games[key]
             await event.reply(f"🛑 Game stopped by {game['owner_mention']}!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+            return
+
+        # 2. Admin/Owner can stop ANY active game in the chat
+        if owner_id in ADMIN_IDS:
+            other_key = next((k for k, g in games.items() if k[0] == chat_id), None)
+            if other_key:
+                game = games[other_key]
+                await game["aki"].close()
+                del games[other_key]
+                await event.reply(f"🛑 Active game for {game['owner_mention']} stopped by Admin!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+                return
+
+        # 3. Otherwise notify sender
+        other_game = next((g for (c, u), g in games.items() if c == chat_id), None)
+        if other_game:
+            await event.reply(f"⚠️ You don't have an active game running. {other_game['owner_mention']}'s game is currently running!\nSend /eraaki to start your own game.", parse_mode="Markdown")
         else:
-            other_game = next((g for (c, u), g in games.items() if c == chat_id), None)
-            if other_game:
-                await event.reply(f"⚠️ You don't have an active game running. {other_game['owner_mention']}'s game is currently running!\nSend /eraaki to start your own game.", parse_mode="Markdown")
-            else:
-                await event.reply(f"No active game for you. Type /eraaki to start one!", parse_mode="Markdown")
+            await event.reply("No active game for you. Type /eraaki to start one!", parse_mode="Markdown")
 
     @client.on(events.CallbackQuery(pattern=rb"^aki_"))
     async def callback_handler(event):
@@ -339,7 +365,8 @@ async def main():
         target_owner_id = int(parts[2]) if len(parts) > 2 else event.sender_id
         key = (chat_id, target_owner_id)
 
-        if event.sender_id != target_owner_id:
+        # Allow target player OR Bot Owner/Admin to interact
+        if event.sender_id != target_owner_id and event.sender_id not in ADMIN_IDS:
             target_name = games[key]["owner_name"] if key in games else "the player"
             await event.answer(f"⚠️ Only {target_name} can answer this game!\nSend /eraaki to start your own game.", alert=True)
             return
@@ -371,6 +398,12 @@ async def main():
                 q = await aki.answer(action)
                 game["last_ans"] = ANSWER_LABELS.get(action, "")
 
+            reply_buttons = get_game_buttons(target_owner_id)
+            guess_buttons = get_guess_buttons(target_owner_id)
+            if event.is_private:
+                reply_buttons += get_private_promo_buttons()
+                guess_buttons += get_private_promo_buttons()
+
             if aki.win:
                 guess = aki.first_guess
                 name = guess.get("name", "Unknown")
@@ -382,16 +415,16 @@ async def main():
                 if photo:
                     try:
                         await event.delete()
-                        await client.send_file(chat_id, photo, caption=text, parse_mode="Markdown", buttons=get_guess_buttons(target_owner_id))
+                        await client.send_file(chat_id, photo, caption=text, parse_mode="Markdown", buttons=guess_buttons)
                         return
                     except Exception:
                         pass
 
-                await event.edit(text, parse_mode="Markdown", buttons=get_guess_buttons(target_owner_id))
+                await event.edit(text, parse_mode="Markdown", buttons=guess_buttons)
             else:
                 last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
                 text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{q}"
-                await event.edit(text, parse_mode="Markdown", buttons=get_game_buttons(target_owner_id))
+                await event.edit(text, parse_mode="Markdown", buttons=reply_buttons)
 
         except MessageNotModifiedError:
             pass
@@ -406,7 +439,7 @@ async def main():
         target_owner_id = int(parts[2]) if len(parts) > 2 else event.sender_id
         key = (chat_id, target_owner_id)
 
-        if event.sender_id != target_owner_id:
+        if event.sender_id != target_owner_id and event.sender_id not in ADMIN_IDS:
             target_name = games[key]["owner_name"] if key in games else "the player"
             await event.answer(f"⚠️ Only {target_name} can respond to this guess!\nSend /eraaki to start your own game.", alert=True)
             return
@@ -416,6 +449,9 @@ async def main():
             return
 
         game = games[key]
+        reply_buttons = get_game_buttons(target_owner_id)
+        if event.is_private:
+            reply_buttons += get_private_promo_buttons()
 
         if action == "yes":
             await game["aki"].close()
@@ -426,8 +462,8 @@ async def main():
             aki = game["aki"]
             try:
                 q = await aki.answer("n")
-                text = f"👤 *Player:* {game['owner_mention']}\n🔄 Continuing game!\n❓ *Question {aki.step}:*\n{q}\n\n{CREDIT_TEXT}"
-                await event.respond(text, parse_mode="Markdown", buttons=get_game_buttons(target_owner_id))
+                text = f"👤 *Player:* {game['owner_mention']}\n🔄 Continuing game!\n❓ *Question {aki.step}:*\n{q}"
+                await event.respond(text, parse_mode="Markdown", buttons=reply_buttons)
             except Exception:
                 await aki.close()
                 del games[key]
