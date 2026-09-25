@@ -96,7 +96,8 @@ class FastAkinator:
             "cm": "false",
             "answer": str(ans_id),
             "step_last_proposition": "",
-            "session": self.aki_session
+            "session": self.aki_session,
+            "identifiant": self.identifiant
         }
 
         headers = {
@@ -106,12 +107,15 @@ class FastAkinator:
             "Origin": f"https://{self.lang}.akinator.com"
         }
 
-        r = await self.session.post(f"https://{self.lang}.akinator.com/answer", data=payload, headers=headers)
-        
-        try:
-            res = r.json()
-        except Exception:
-            res = {}
+        res = {}
+        for attempt in range(2):
+            try:
+                r = await self.session.post(f"https://{self.lang}.akinator.com/answer", data=payload, headers=headers)
+                res = r.json()
+                if isinstance(res, dict) and res.get("completion") == "OK":
+                    break
+            except Exception:
+                await asyncio.sleep(0.5)
 
         if isinstance(res, dict) and res.get("completion") == "OK":
             if "id_proposition" in res or "name_proposition" in res:
@@ -127,7 +131,9 @@ class FastAkinator:
                 if res.get("question"):
                     self.question = html.unescape(res.get("question"))
         else:
-            await self.start_game()
+            # Increment step gracefully instead of wiping session with start_game()
+            self.step += 1
+            self.progression = min(99.0, self.progression + 5.0)
 
         return self.question
 
@@ -141,6 +147,7 @@ class FastAkinator:
             "sid": "1",
             "cm": "false",
             "session": self.aki_session,
+            "identifiant": self.identifiant
         }
 
         headers = {
@@ -150,8 +157,8 @@ class FastAkinator:
             "Origin": f"https://{self.lang}.akinator.com"
         }
 
-        r = await self.session.post(f"https://{self.lang}.akinator.com/cancel_answer", data=payload, headers=headers)
         try:
+            r = await self.session.post(f"https://{self.lang}.akinator.com/cancel_answer", data=payload, headers=headers)
             res = r.json()
             if isinstance(res, dict) and res.get("question"):
                 self.step = int(res.get("step", max(1, self.step - 1)))
