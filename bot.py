@@ -3,6 +3,7 @@
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
 - Host-Locked Gameplay: Only the user who initiated /eraaki can click the buttons in group chats.
 - Public Visibility: Displays the player's name and last selected answer to the entire group.
+- Web Health Check: Runs a lightweight HTTP server on $PORT for Render Free Web Service ($0/mo).
 """
 
 import os
@@ -13,6 +14,7 @@ import asyncio
 import re
 import html
 from pathlib import Path
+from aiohttp import web
 from curl_cffi.requests import AsyncSession
 from telethon import TelegramClient, events, Button
 from telethon.errors import MessageNotModifiedError
@@ -162,6 +164,19 @@ def get_guess_buttons():
         [Button.inline("🔄 No, keep guessing!", b"guess_no")]
     ]
 
+async def start_web_server():
+    port = int(os.getenv("PORT", "8080"))
+    app = web.Application()
+    async def health(req):
+        return web.Response(text="Akinator Bot Online 24/7!")
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"✓ Health check web server active on port {port}")
+
 async def main():
     bot_token = os.getenv("BOT_TOKEN")
     if not bot_token and len(sys.argv) > 1:
@@ -171,10 +186,17 @@ async def main():
         print("Usage: BOT_TOKEN=your_token python3 bot.py OR python3 bot.py <BOT_TOKEN>")
         sys.exit(1)
 
-    with open(CONFIG_PATH, "r") as f:
-        data = json.load(f)
-        api_id = int(data["api_id"])
-        api_hash = data["api_hash"]
+    api_id = int(os.getenv("TELEGRAM_API_ID", "30909654"))
+    api_hash = os.getenv("TELEGRAM_API_HASH", "d4b340a406c5c1ed1d7f26d44749602b")
+
+    if CONFIG_PATH.exists():
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                data = json.load(f)
+                api_id = int(data.get("api_id", api_id))
+                api_hash = data.get("api_hash", api_hash)
+        except Exception:
+            pass
 
     session_dir = Path.home() / "Projects" / "Akinator-Bot"
     session_dir.mkdir(parents=True, exist_ok=True)
@@ -182,6 +204,9 @@ async def main():
 
     client = TelegramClient(str(session_path), api_id, api_hash)
     await client.start(bot_token=bot_token)
+
+    # Start lightweight web server for Render Free Web Service
+    asyncio.create_task(start_web_server())
 
     # Register bot command menu autocomplete
     try:
@@ -211,7 +236,6 @@ async def main():
 
         if chat_id in games:
             existing_game = games[chat_id]
-            host_name = existing_game.get("owner_name", "another player")
             await event.reply(f"🎮 A game initiated by {existing_game['owner_mention']} is already active in this chat! Choose an answer or type /stop to end it.", buttons=get_game_buttons())
             return
 
@@ -238,7 +262,6 @@ async def main():
         chat_id = event.chat_id
         if chat_id in games:
             game = games[chat_id]
-            # Allow game owner or chat admins to stop
             if event.sender_id != game["owner_id"]:
                 await event.reply(f"⚠️ Only {game['owner_mention']} who started the game can stop it!")
                 return
@@ -260,7 +283,6 @@ async def main():
 
         game = games[chat_id]
 
-        # Enforce Host Lock: Only the game initiator can interact with the buttons!
         if event.sender_id != game["owner_id"]:
             await event.answer(f"⚠️ Only {game['owner_name']} can answer this game!\nSend /eraaki to start your own game.", alert=True)
             return
