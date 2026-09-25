@@ -2,7 +2,7 @@
 """
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
 - Robust Entity Resolution: Guarantees full names and mentions for all group chat players (e.g. QUARTZ, Kush).
-- Session & Cookie Synchronization: Enforces homepage GET cookie clearance before game POST to guarantee valid tokens.
+- Strict Token Validation: Validates session, identifiant, and initial question extraction so broken sessions are never created.
 - Non-Blocking Background Telemetry Logging: Ships user choices and locations instantly without slowing button clicks.
 - Credit Branding: "Made by @erawat_69" on final guess & game end screens.
 """
@@ -62,7 +62,8 @@ class FastAkinator:
             "Origin": f"https://{self.lang}.akinator.com"
         }
 
-        for attempt in range(3):
+        last_err = None
+        for attempt in range(4):
             try:
                 # 1. Obtain fresh cookies from homepage
                 await self.session.get(f"https://{self.lang}.akinator.com/", headers=headers, timeout=10)
@@ -72,27 +73,37 @@ class FastAkinator:
                 r = await self.session.post(url, data={"sid": "1", "cm": "false"}, headers=headers, timeout=10)
                 text = r.text
 
-                sess_m = re.search(r"localStorage\.setItem\('session',\s*'([^']+)'\)", text) or re.search(r"session\s*:\s*'([^']+)'", text) or re.search(r'id="session"\s+value="([^"]+)"', text)
-                id_m = re.search(r"localStorage\.setItem\('identifiant',\s*'([^']+)'\)", text) or re.search(r"identifiant\s*:\s*'([^']+)'", text)
+                sess_m = re.search(r"localStorage\.setItem\('session',\s*'([^']+)'\)", text) or \
+                         re.search(r"\$('#session')\.val\('([^']+)'\)", text) or \
+                         re.search(r'id="session"\s+value="([^"]+)"', text) or \
+                         re.search(r"session\s*:\s*'([^']+)'", text)
 
-                self.aki_session = sess_m.group(1) if sess_m else ""
-                self.identifiant = id_m.group(1) if id_m else ""
+                id_m = re.search(r"localStorage\.setItem\('identifiant',\s*'([^']+)'\)", text) or \
+                       re.search(r"\$('#identifiant')\.val\('([^']+)'\)", text) or \
+                       re.search(r"identifiant\s*:\s*'([^']+)'", text)
 
-                if self.aki_session and self.identifiant:
-                    q_match = re.search(r'id="question-label">([^<]+)</p>', text)
-                    if q_match:
-                        self.question = html.unescape(q_match.group(1).strip())
-                    else:
-                        self.question = "Is your character real?"
-                    break
+                q_m = re.search(r'id="question-label">([^<]+)</p>', text) or \
+                      re.search(r'class="bubble-body">([^<]+)</div>', text)
+
+                if sess_m and id_m and q_m:
+                    parsed_sess = sess_m.group(1).strip()
+                    parsed_id = id_m.group(1).strip()
+                    parsed_q = html.unescape(q_m.group(1).strip())
+
+                    if parsed_sess and parsed_id and parsed_q and parsed_q != "Is your character real?":
+                        self.aki_session = parsed_sess
+                        self.identifiant = parsed_id
+                        self.question = parsed_q
+                        self.step = 1
+                        self.progression = 0.0
+                        self.win = False
+                        return self.question
             except Exception as e:
-                logging.error(f"start_game attempt {attempt+1} failed: {e}")
+                last_err = e
+                logging.error(f"start_game attempt {attempt+1} error: {e}")
                 await asyncio.sleep(0.5)
 
-        self.step = 1
-        self.progression = 0.0
-        self.win = False
-        return self.question
+        raise RuntimeError(f"Akinator server connection busy ({last_err})")
 
     async def answer(self, ans_str):
         self.win = False
@@ -148,9 +159,11 @@ class FastAkinator:
                 if res.get("question"):
                     self.question = html.unescape(res.get("question"))
         else:
-            # Re-sync session if completion KO
-            logging.warning(f"Answer KO: {res}. Re-syncing session.")
-            await self.start_game()
+            logging.warning(f"Answer KO response: {res}. Re-syncing session.")
+            try:
+                await self.start_game()
+            except Exception as e:
+                logging.error(f"Failed session re-sync: {e}")
 
         return self.question
 
@@ -410,7 +423,7 @@ async def main():
             log_telemetry(client, user_name, user_id, chat_title, chat_id, "🎮 Started New Game", f"Q1: {q}")
         except Exception as e:
             logging.error(f"Error starting game: {e}")
-            await msg.edit(f"❌ Failed to start Akinator: {e}")
+            await msg.edit(f"❌ Akinator servers are currently busy. Please type /eraaki again in a moment!", parse_mode="Markdown")
 
     @client.on(events.NewMessage(pattern=r"(?i)^/(stop|end|eraakistop)(@\w+)?$"))
     async def stop_handler(event):
