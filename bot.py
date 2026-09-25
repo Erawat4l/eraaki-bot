@@ -86,6 +86,7 @@ class FastAkinator:
         return self.question
 
     async def answer(self, ans_str):
+        self.win = False
         ans_map = {"y": 0, "n": 1, "i": 2, "p": 3, "pn": 4}
         ans_id = ans_map.get(ans_str, 0)
 
@@ -118,7 +119,7 @@ class FastAkinator:
                 await asyncio.sleep(0.5)
 
         if isinstance(res, dict) and res.get("completion") == "OK":
-            if "id_proposition" in res or "name_proposition" in res:
+            if res.get("id_proposition") or res.get("name_proposition"):
                 self.win = True
                 self.first_guess = {
                     "name": html.unescape(res.get("name_proposition", "Unknown")),
@@ -138,6 +139,7 @@ class FastAkinator:
         return self.question
 
     async def back(self):
+        self.win = False
         if self.step <= 1:
             return self.question
 
