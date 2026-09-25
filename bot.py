@@ -132,9 +132,8 @@ class FastAkinator:
                 if res.get("question"):
                     self.question = html.unescape(res.get("question"))
         else:
-            # Increment step gracefully instead of wiping session with start_game()
-            self.step += 1
-            self.progression = min(99.0, self.progression + 5.0)
+            # Re-initialize session on KO so questions never get stuck or repeated
+            await self.start_game()
 
         return self.question
 
@@ -374,18 +373,22 @@ async def main():
         target_owner_id = int(parts[2]) if len(parts) > 2 else event.sender_id
         key = (chat_id, target_owner_id)
 
-        # Allow target player OR Bot Owner/Admin to interact
-        if event.sender_id != target_owner_id and event.sender_id not in ADMIN_IDS:
-            target_name = games[key]["owner_name"] if key in games else "the player"
-            await event.answer(f"⚠️ Only {target_name} can answer this game!\nSend /eraaki to start your own game.", alert=True)
-            return
-
         if key not in games:
+            # Fallback to any active game running in this group chat
+            key = next((k for k in games if k[0] == chat_id), None)
+
+        if not key or key not in games:
             await event.answer("Game expired or ended. Type /eraaki!", alert=True)
             return
 
         game = games[key]
         aki = game["aki"]
+
+        # In group chats, update player name & mention to the user currently clicking
+        if not event.is_private:
+            clicker_name, clicker_mention = await get_player_info(client, event, event.sender_id)
+            game["owner_name"] = clicker_name
+            game["owner_mention"] = clicker_mention
 
         if action == "end":
             await aki.close()
@@ -448,16 +451,18 @@ async def main():
         target_owner_id = int(parts[2]) if len(parts) > 2 else event.sender_id
         key = (chat_id, target_owner_id)
 
-        if event.sender_id != target_owner_id and event.sender_id not in ADMIN_IDS:
-            target_name = games[key]["owner_name"] if key in games else "the player"
-            await event.answer(f"⚠️ Only {target_name} can respond to this guess!\nSend /eraaki to start your own game.", alert=True)
-            return
-
         if key not in games:
+            key = next((k for k in games if k[0] == chat_id), None)
+
+        if not key or key not in games:
             await event.answer("No active game.", alert=True)
             return
 
         game = games[key]
+        if not event.is_private:
+            clicker_name, clicker_mention = await get_player_info(client, event, event.sender_id)
+            game["owner_name"] = clicker_name
+            game["owner_mention"] = clicker_mention
         reply_buttons = get_game_buttons(target_owner_id)
         if event.is_private:
             reply_buttons += get_private_promo_buttons()
