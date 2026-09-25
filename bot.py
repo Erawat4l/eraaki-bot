@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
-- Single Unified Group Chat Game Session: Anyone in group chat can play, answer, or view the active game.
+- Robust Entity Resolution: Guarantees full names and mentions for all group chat players (e.g. Kush).
 - Non-Blocking Background Telemetry Logging: Ships user choices and locations instantly without slowing button clicks.
-- Header-Authenticated Akinator Session Management: Ensures valid session/identifiant extraction so questions always advance cleanly.
+- Session Preservation: Prevents game state resets on temporary network hiccups.
 - Credit Branding: "Made by @erawat_69" on final guess & game end screens.
 """
 
@@ -60,12 +60,12 @@ class FastAkinator:
             "Origin": f"https://{self.lang}.akinator.com"
         }
         try:
-            await self.session.get(f"https://{self.lang}.akinator.com/", headers=headers)
+            await self.session.get(f"https://{self.lang}.akinator.com/", headers=headers, timeout=10)
         except Exception:
             pass
 
         url = f"https://{self.lang}.akinator.com/game"
-        r = await self.session.post(url, data={"sid": "1", "cm": "false"}, headers=headers)
+        r = await self.session.post(url, data={"sid": "1", "cm": "false"}, headers=headers, timeout=10)
         text = r.text
 
         sess_m = re.search(r"localStorage\.setItem\('session',\s*'([^']+)'\)", text)
@@ -116,14 +116,20 @@ class FastAkinator:
         }
 
         res = {}
-        for attempt in range(2):
+        for attempt in range(3):
             try:
-                r = await self.session.post(f"https://{self.lang}.akinator.com/answer", data=payload, headers=headers)
+                r = await self.session.post(
+                    f"https://{self.lang}.akinator.com/answer",
+                    data=payload,
+                    headers=headers,
+                    timeout=10
+                )
                 res = r.json()
                 if isinstance(res, dict) and res.get("completion") == "OK":
                     break
-            except Exception:
-                await asyncio.sleep(0.3)
+            except Exception as e:
+                logging.error(f"Answer attempt {attempt+1} failed: {e}")
+                await asyncio.sleep(0.4)
 
         if isinstance(res, dict) and res.get("completion") == "OK":
             if res.get("id_proposition") or res.get("name_proposition"):
@@ -139,7 +145,7 @@ class FastAkinator:
                 if res.get("question"):
                     self.question = html.unescape(res.get("question"))
         else:
-            await self.start_game()
+            logging.warning(f"Answer non-OK response: {res}. Retaining question state.")
 
         return self.question
 
@@ -165,7 +171,12 @@ class FastAkinator:
         }
 
         try:
-            r = await self.session.post(f"https://{self.lang}.akinator.com/cancel_answer", data=payload, headers=headers)
+            r = await self.session.post(
+                f"https://{self.lang}.akinator.com/cancel_answer",
+                data=payload,
+                headers=headers,
+                timeout=10
+            )
             res = r.json()
             if isinstance(res, dict) and res.get("question"):
                 self.step = int(res.get("step", max(1, self.step - 1)))
@@ -203,20 +214,43 @@ def get_private_promo_buttons():
         [Button.url("💬 Owner Contact", "https://t.me/erawat_69")]
     ]
 
-async def get_player_info(client, event, user_id):
-    sender = await event.get_sender()
-    name = ""
-    if sender:
-        if getattr(sender, 'first_name', None):
-            name = sender.first_name
-            if getattr(sender, 'last_name', None):
-                name += f" {sender.last_name}"
-        elif getattr(sender, 'username', None):
-            name = f"@{sender.username}"
-        elif getattr(sender, 'title', None):
-            name = sender.title
+async def resolve_user_id(event):
+    if getattr(event, 'sender_id', None):
+        return event.sender_id
+    if getattr(event, 'from_id', None):
+        fid = event.from_id
+        if getattr(fid, 'user_id', None):
+            return fid.user_id
+        if getattr(fid, 'channel_id', None):
+            return fid.channel_id
+    try:
+        sender = await event.get_sender()
+        if sender and getattr(sender, 'id', None):
+            return sender.id
+    except Exception:
+        pass
+    return event.chat_id
 
-    if not name or name == "Player":
+async def get_player_info(client, event, user_id):
+    if not user_id:
+        user_id = await resolve_user_id(event)
+
+    name = ""
+    try:
+        sender = await event.get_sender()
+        if sender:
+            if getattr(sender, 'first_name', None):
+                name = sender.first_name
+                if getattr(sender, 'last_name', None):
+                    name += f" {sender.last_name}"
+            elif getattr(sender, 'username', None):
+                name = f"@{sender.username}"
+            elif getattr(sender, 'title', None):
+                name = sender.title
+    except Exception:
+        pass
+
+    if not name or name == "Player" or "None" in name:
         try:
             ent = await client.get_entity(user_id)
             if getattr(ent, 'first_name', None):
@@ -225,11 +259,13 @@ async def get_player_info(client, event, user_id):
                     name += f" {ent.last_name}"
             elif getattr(ent, 'username', None):
                 name = f"@{ent.username}"
+            elif getattr(ent, 'title', None):
+                name = ent.title
         except Exception:
             pass
 
-    if not name:
-        name = f"User {user_id}"
+    if not name or "None" in name:
+        name = f"Player ({user_id})"
 
     mention = f"[{name}](tg://user?id={user_id})"
     return name, mention
@@ -332,7 +368,7 @@ async def main():
     @client.on(events.NewMessage(pattern=r"(?i)^/(eraaki|start)(@\w+)?$"))
     async def start_handler(event):
         chat_id = event.chat_id
-        user_id = event.sender_id
+        user_id = await resolve_user_id(event)
         game_key = chat_id if not event.is_private else user_id
 
         user_name, user_mention = await get_player_info(client, event, user_id)
@@ -374,7 +410,7 @@ async def main():
     @client.on(events.NewMessage(pattern=r"(?i)^/(stop|end|eraakistop)(@\w+)?$"))
     async def stop_handler(event):
         chat_id = event.chat_id
-        user_id = event.sender_id
+        user_id = await resolve_user_id(event)
         game_key = chat_id if not event.is_private else user_id
 
         user_name, user_mention = await get_player_info(client, event, user_id)
@@ -395,7 +431,7 @@ async def main():
     @client.on(events.CallbackQuery(pattern=rb"^aki_"))
     async def callback_handler(event):
         chat_id = event.chat_id
-        user_id = event.sender_id
+        user_id = await resolve_user_id(event)
         game_key = chat_id if not event.is_private else user_id
 
         action = event.data.decode().replace("aki_", "")
@@ -476,7 +512,7 @@ async def main():
     @client.on(events.CallbackQuery(pattern=rb"^guess_"))
     async def guess_handler(event):
         chat_id = event.chat_id
-        user_id = event.sender_id
+        user_id = await resolve_user_id(event)
         game_key = chat_id if not event.is_private else user_id
 
         action = event.data.decode().replace("guess_", "")
