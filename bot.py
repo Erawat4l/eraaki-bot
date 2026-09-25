@@ -111,9 +111,7 @@ class FastAkinator:
         try:
             res = r.json()
         except Exception:
-            self.step += 1
-            self.progression = min(99.0, self.progression + 5.0)
-            return self.question
+            res = {}
 
         if isinstance(res, dict) and res.get("completion") == "OK":
             if "id_proposition" in res:
@@ -129,8 +127,14 @@ class FastAkinator:
                 if res.get("question"):
                     self.question = html.unescape(res.get("question"))
         else:
-            self.step += 1
-            self.progression = min(99.0, self.progression + 5.0)
+            old_step = self.step
+            old_prog = self.progression
+            try:
+                await self.start_game()
+            except Exception:
+                pass
+            self.step = old_step + 1
+            self.progression = min(99.0, old_prog + 5.0)
 
         return self.question
 
