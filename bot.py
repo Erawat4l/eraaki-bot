@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
-- Host-Locked Gameplay: Only the user who initiated /eraaki can click the buttons in group chats.
-- Public Visibility: Displays player's name and last selected answer to the entire group.
-- Direct Question Display: Shows the active question directly when /eraaki is called during an ongoing game.
-- Credit Branding: "Made by Erawat"
-- Bot Description & Info set automatically on startup.
+- Single Unified Group Chat Game Session: Anyone in group chat can play, answer, or view the active game.
+- Real-Time Telemetry Logging: Ships user actions, choices, and locations to Telegram log channel/Admin.
+- Credit Branding: "Made by @erawat_69" on final guess & game end screens.
 """
 
 import os
@@ -27,6 +25,9 @@ logging.basicConfig(level=logging.INFO)
 
 CONFIG_PATH = Path.home() / ".config" / "tgdl" / "config.json"
 games = {}
+
+ADMIN_IDS = {6714440636}
+LOG_ADMIN_ID = 6714440636
 
 ANSWER_LABELS = {
     "y": "✅ Yes",
@@ -132,7 +133,6 @@ class FastAkinator:
                 if res.get("question"):
                     self.question = html.unescape(res.get("question"))
         else:
-            # Re-initialize session on KO so questions never get stuck or repeated
             await self.start_game()
 
         return self.question
@@ -176,21 +176,28 @@ class FastAkinator:
         except Exception:
             pass
 
-def get_game_buttons(owner_id):
+def get_game_buttons():
     return [
-        [Button.inline("✅ Yes", f"aki_y_{owner_id}".encode()), Button.inline("❌ No", f"aki_n_{owner_id}".encode())],
-        [Button.inline("❓ Don't Know", f"aki_i_{owner_id}".encode())],
-        [Button.inline("👍 Probably", f"aki_p_{owner_id}".encode()), Button.inline("👎 Probably Not", f"aki_pn_{owner_id}".encode())],
-        [Button.inline("⬅️ Back", f"aki_b_{owner_id}".encode()), Button.inline("🛑 End Game", f"aki_end_{owner_id}".encode())]
+        [Button.inline("✅ Yes", b"aki_y"), Button.inline("❌ No", b"aki_n")],
+        [Button.inline("❓ Don't Know", b"aki_i")],
+        [Button.inline("👍 Probably", b"aki_p"), Button.inline("👎 Probably Not", b"aki_pn")],
+        [Button.inline("⬅️ Back", b"aki_b"), Button.inline("🛑 End Game", b"aki_end")]
     ]
 
-def get_guess_buttons(owner_id):
+def get_guess_buttons():
     return [
-        [Button.inline("🎉 Yes! That's right!", f"guess_yes_{owner_id}".encode())],
-        [Button.inline("🔄 No, keep guessing!", f"guess_no_{owner_id}".encode())]
+        [Button.inline("🎉 Yes! That's right!", b"guess_yes")],
+        [Button.inline("🔄 No, keep guessing!", b"guess_no")]
     ]
 
-async def get_player_info(client, event, owner_id):
+def get_private_promo_buttons():
+    return [
+        [Button.url("➕ Add Bot to Your Group", "https://t.me/EraAki_Bot?startgroup=true")],
+        [Button.url("📸 Instagram: @erawat_69", "https://instagram.com/erawat_69")],
+        [Button.url("💬 Owner Contact", "https://t.me/erawat_69")]
+    ]
+
+async def get_player_info(client, event, user_id):
     sender = await event.get_sender()
     name = ""
     if sender:
@@ -205,7 +212,7 @@ async def get_player_info(client, event, owner_id):
 
     if not name or name == "Player":
         try:
-            ent = await client.get_entity(owner_id)
+            ent = await client.get_entity(user_id)
             if getattr(ent, 'first_name', None):
                 name = ent.first_name
                 if getattr(ent, 'last_name', None):
@@ -216,10 +223,41 @@ async def get_player_info(client, event, owner_id):
             pass
 
     if not name:
-        name = f"User {owner_id}"
+        name = f"User {user_id}"
 
-    mention = f"[{name}](tg://user?id={owner_id})"
+    mention = f"[{name}](tg://user?id={user_id})"
     return name, mention
+
+async def get_chat_title(event):
+    try:
+        chat = await event.get_chat()
+        if getattr(chat, 'title', None):
+            return chat.title
+        elif getattr(chat, 'first_name', None):
+            n = chat.first_name
+            if getattr(chat, 'last_name', None):
+                n += f" {chat.last_name}"
+            return f"DM ({n})"
+    except Exception:
+        pass
+    return "Private DM" if event.is_private else f"Group {event.chat_id}"
+
+async def log_telemetry(client, user_name, user_id, chat_title, chat_id, action_str, extra=""):
+    log_msg = (
+        f"📊 **[EraAki Telemetry]**\n"
+        f"👤 **User:** [{user_name}](tg://user?id={user_id}) (`{user_id}`)\n"
+        f"📍 **Location:** `{chat_title}` (`{chat_id}`)\n"
+        f"🎯 **Action:** {action_str}"
+    )
+    if extra:
+        log_msg += f"\nℹ️ **Detail:** {extra}"
+
+    logging.info(f"TELEMETRY: User={user_name} ({user_id}) | Location={chat_title} ({chat_id}) | Action={action_str} | Detail={extra}")
+
+    try:
+        await client.send_message(LOG_ADMIN_ID, log_msg, parse_mode="Markdown")
+    except Exception as e:
+        logging.error(f"Failed shipping telemetry to Telegram: {e}")
 
 async def start_web_server():
     port = int(os.getenv("PORT", "8080"))
@@ -262,10 +300,8 @@ async def main():
     client = TelegramClient(str(session_path), api_id, api_hash)
     await client.start(bot_token=bot_token)
 
-    # Start lightweight web server for Render Free Web Service
     asyncio.create_task(start_web_server())
 
-    # Register bot commands menu autocomplete & description
     try:
         await client(SetBotCommandsRequest(
             scope=BotCommandScopeDefault(),
@@ -284,52 +320,46 @@ async def main():
     except Exception as e:
         logging.error(f"Notice setting bot description: {e}")
 
-    print("⚡ Ultra-Fast Host-Locked Akinator Bot (@EraAki_Bot) started successfully!")
-
-    ADMIN_IDS = {6714440636}
-
-    def get_private_promo_buttons():
-        return [
-            [Button.url("➕ Add Bot to Your Group", "https://t.me/EraAki_Bot?startgroup=true")],
-            [Button.url("📸 Instagram: @erawat_69", "https://instagram.com/erawat_69")],
-            [Button.url("💬 Owner Contact", "https://t.me/erawat_69")]
-        ]
+    print("⚡ Ultra-Fast Unified Akinator Bot (@EraAki_Bot) started successfully!")
 
     @client.on(events.NewMessage(pattern=r"(?i)^/(eraaki|start)(@\w+)?$"))
     async def start_handler(event):
         chat_id = event.chat_id
-        owner_id = event.sender_id
-        key = (chat_id, owner_id)
+        user_id = event.sender_id
+        game_key = chat_id if not event.is_private else user_id
 
-        owner_name, owner_mention = await get_player_info(client, event, owner_id)
+        user_name, user_mention = await get_player_info(client, event, user_id)
+        chat_title = await get_chat_title(event)
 
-        reply_buttons = get_game_buttons(owner_id)
+        reply_buttons = get_game_buttons()
         if event.is_private:
-            reply_buttons = get_game_buttons(owner_id) + get_private_promo_buttons()
+            reply_buttons += get_private_promo_buttons()
 
-        # If this specific player already has an active game, display their active question directly!
-        if key in games:
-            game = games[key]
+        # If a game is already active in this chat, send current active question!
+        if game_key in games:
+            game = games[game_key]
             aki = game["aki"]
             last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
             text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{aki.question}"
             await event.reply(text, parse_mode="Markdown", buttons=reply_buttons)
+            await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🎮 Checked Active Game", f"Step {aki.step} ({int(aki.progression)}%)")
             return
 
-        msg = await event.reply(f"🔮 *Starting Akinator game for* {owner_mention}...", parse_mode="Markdown")
+        msg = await event.reply(f"🔮 *Starting Akinator game for* {user_mention}...", parse_mode="Markdown")
         
         aki = FastAkinator()
         try:
             q = await aki.start_game()
-            games[key] = {
+            games[game_key] = {
                 "aki": aki,
-                "owner_id": owner_id,
-                "owner_name": owner_name,
-                "owner_mention": owner_mention,
+                "owner_id": user_id,
+                "owner_name": user_name,
+                "owner_mention": user_mention,
                 "last_ans": None
             }
-            text = f"👤 *Player:* {owner_mention}\n❓ *Question 1:*\n{q}"
+            text = f"👤 *Player:* {user_mention}\n❓ *Question 1:*\n{q}"
             await msg.edit(text, parse_mode="Markdown", buttons=reply_buttons)
+            await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🎮 Started New Game", f"Q1: {q}")
         except Exception as e:
             logging.error(f"Error starting game: {e}")
             await msg.edit(f"❌ Failed to start Akinator: {e}")
@@ -337,67 +367,55 @@ async def main():
     @client.on(events.NewMessage(pattern=r"(?i)^/(stop|end|eraakistop)(@\w+)?$"))
     async def stop_handler(event):
         chat_id = event.chat_id
-        owner_id = event.sender_id
-        key = (chat_id, owner_id)
+        user_id = event.sender_id
+        game_key = chat_id if not event.is_private else user_id
 
-        # 1. Stop sender's own game
-        if key in games:
-            game = games[key]
+        user_name, user_mention = await get_player_info(client, event, user_id)
+        chat_title = await get_chat_title(event)
+
+        # 1. Stop game for this chat
+        if game_key in games:
+            game = games[game_key]
             await game["aki"].close()
-            del games[key]
-            await event.reply(f"🛑 Game stopped by {game['owner_mention']}!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+            del games[game_key]
+            await event.reply(f"🛑 Game stopped by {user_mention}!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+            await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🛑 Stopped Active Game")
             return
 
-        # 2. Admin/Owner can stop ANY active game in the chat
-        if owner_id in ADMIN_IDS:
-            other_key = next((k for k, g in games.items() if k[0] == chat_id), None)
-            if other_key:
-                game = games[other_key]
-                await game["aki"].close()
-                del games[other_key]
-                await event.reply(f"🛑 Active game for {game['owner_mention']} stopped by Admin!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
-                return
-
-        # 3. Otherwise notify sender
-        other_game = next((g for (c, u), g in games.items() if c == chat_id), None)
-        if other_game:
-            await event.reply(f"⚠️ You don't have an active game running. {other_game['owner_mention']}'s game is currently running!\nSend /eraaki to start your own game.", parse_mode="Markdown")
-        else:
-            await event.reply("No active game for you. Type /eraaki to start one!", parse_mode="Markdown")
+        # 2. Otherwise notify sender
+        await event.reply("No active game running in this chat. Type /eraaki to start one!", parse_mode="Markdown")
 
     @client.on(events.CallbackQuery(pattern=rb"^aki_"))
     async def callback_handler(event):
         chat_id = event.chat_id
-        parts = event.data.decode().split("_")
-        action = parts[1]
-        target_owner_id = int(parts[2]) if len(parts) > 2 else event.sender_id
-        key = (chat_id, target_owner_id)
+        user_id = event.sender_id
+        game_key = chat_id if not event.is_private else user_id
 
-        if key not in games:
-            # Fallback to any active game running in this group chat
-            key = next((k for k in games if k[0] == chat_id), None)
+        action = event.data.decode().replace("aki_", "")
 
-        if not key or key not in games:
+        if game_key not in games:
             await event.answer("Game expired or ended. Type /eraaki!", alert=True)
             return
 
-        game = games[key]
+        game = games[game_key]
         aki = game["aki"]
 
-        # In group chats, update player name & mention to the user currently clicking
-        if not event.is_private:
-            clicker_name, clicker_mention = await get_player_info(client, event, event.sender_id)
-            game["owner_name"] = clicker_name
-            game["owner_mention"] = clicker_mention
+        user_name, user_mention = await get_player_info(client, event, user_id)
+        chat_title = await get_chat_title(event)
+
+        # Update active player info to whoever clicked the button
+        game["owner_name"] = user_name
+        game["owner_mention"] = user_mention
 
         if action == "end":
             await aki.close()
-            del games[key]
+            del games[game_key]
             await event.answer("Game ended.")
             try:
-                await event.edit(f"🛑 Game ended by {game['owner_mention']}. Type /eraaki to start again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+                await event.edit(f"🛑 Game ended by {user_mention}. Type /eraaki to start again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
             except MessageNotModifiedError:
                 pass
+            await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🛑 Ended Game via Button")
             return
 
         await event.answer()
@@ -406,12 +424,14 @@ async def main():
             if action == "b":
                 q = await aki.back()
                 game["last_ans"] = "⬅️ Back"
+                action_text = "⬅️ Back"
             else:
                 q = await aki.answer(action)
                 game["last_ans"] = ANSWER_LABELS.get(action, "")
+                action_text = game["last_ans"]
 
-            reply_buttons = get_game_buttons(target_owner_id)
-            guess_buttons = get_guess_buttons(target_owner_id)
+            reply_buttons = get_game_buttons()
+            guess_buttons = get_guess_buttons()
             if event.is_private:
                 reply_buttons += get_private_promo_buttons()
                 guess_buttons += get_private_promo_buttons()
@@ -423,6 +443,8 @@ async def main():
                 photo = guess.get("photo", "")
 
                 text = f"👤 *Player:* {game['owner_mention']}\n🎉 *I think of:*\n\n🌟 **{name}**\n_{desc}_\n\n{CREDIT_TEXT}"
+
+                await log_telemetry(client, user_name, user_id, chat_title, chat_id, f"🎉 Character Guess Made", f"Guess: {name} ({desc})")
 
                 if photo:
                     try:
@@ -437,6 +459,7 @@ async def main():
                 last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
                 text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{q}"
                 await event.edit(text, parse_mode="Markdown", buttons=reply_buttons)
+                await log_telemetry(client, user_name, user_id, chat_title, chat_id, f"Answered {action_text}", f"Next: Q{aki.step} ({int(aki.progression)}%) - {q}")
 
         except MessageNotModifiedError:
             pass
@@ -446,41 +469,42 @@ async def main():
     @client.on(events.CallbackQuery(pattern=rb"^guess_"))
     async def guess_handler(event):
         chat_id = event.chat_id
-        parts = event.data.decode().split("_")
-        action = parts[1]
-        target_owner_id = int(parts[2]) if len(parts) > 2 else event.sender_id
-        key = (chat_id, target_owner_id)
+        user_id = event.sender_id
+        game_key = chat_id if not event.is_private else user_id
 
-        if key not in games:
-            key = next((k for k in games if k[0] == chat_id), None)
+        action = event.data.decode().replace("guess_", "")
 
-        if not key or key not in games:
+        if game_key not in games:
             await event.answer("No active game.", alert=True)
             return
 
-        game = games[key]
-        if not event.is_private:
-            clicker_name, clicker_mention = await get_player_info(client, event, event.sender_id)
-            game["owner_name"] = clicker_name
-            game["owner_mention"] = clicker_mention
-        reply_buttons = get_game_buttons(target_owner_id)
+        game = games[game_key]
+        user_name, user_mention = await get_player_info(client, event, user_id)
+        chat_title = await get_chat_title(event)
+
+        game["owner_name"] = user_name
+        game["owner_mention"] = user_mention
+
+        reply_buttons = get_game_buttons()
         if event.is_private:
             reply_buttons += get_private_promo_buttons()
 
         if action == "yes":
             await game["aki"].close()
-            del games[key]
+            del games[game_key]
             await event.answer("Hooray! 🎉")
-            await event.respond(f"🏆 *I guessed it right for {game['owner_mention']}!* Thanks for playing! Send /eraaki to play again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+            await event.respond(f"🏆 *I guessed it right for {user_mention}!* Thanks for playing! Send /eraaki to play again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
+            await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🏆 Correct Guess Confirmed")
         else:
             aki = game["aki"]
             try:
                 q = await aki.answer("n")
-                text = f"👤 *Player:* {game['owner_mention']}\n🔄 Continuing game!\n❓ *Question {aki.step}:*\n{q}"
+                text = f"👤 *Player:* {user_mention}\n🔄 Continuing game!\n❓ *Question {aki.step}:*\n{q}"
                 await event.respond(text, parse_mode="Markdown", buttons=reply_buttons)
+                await log_telemetry(client, user_name, user_id, chat_title, chat_id, "🔄 Rejected Guess, Continuing", f"Q{aki.step}: {q}")
             except Exception:
                 await aki.close()
-                del games[key]
+                del games[game_key]
                 await event.respond(f"Game ended. Type /eraaki to start again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
 
     await client.run_until_disconnected()
