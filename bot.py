@@ -20,7 +20,7 @@ from aiohttp import web
 from curl_cffi.requests import AsyncSession
 from telethon import TelegramClient, events, Button
 from telethon.errors import MessageNotModifiedError
-from telethon.tl.functions.bots import SetBotDescriptionRequest, SetBotInfoRequest, SetBotCommandsRequest
+from telethon.tl.functions.bots import SetBotInfoRequest, SetBotCommandsRequest
 from telethon.tl.types import BotCommand, BotCommandScopeDefault
 
 logging.basicConfig(level=logging.INFO)
@@ -232,12 +232,9 @@ async def main():
                 BotCommand(command="eraakistop", description="🛑 Stop active Akinator game")
             ]
         ))
-        await client(SetBotDescriptionRequest(
-            description="Official Akinator Telegram Bot made by Erawat. Play Akinator in group chats and DMs!",
-            lang_code="en"
-        ))
         await client(SetBotInfoRequest(
             about="Official Akinator Telegram Bot made by Erawat. Play Akinator in group chats and DMs!",
+            description="Official Akinator Telegram Bot made by Erawat. Play Akinator in group chats and DMs!",
             lang_code="en"
         ))
         print("✓ Registered bot description & command autocomplete menu.")
