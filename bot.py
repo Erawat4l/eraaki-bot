@@ -65,21 +65,30 @@ class FastAkinator:
         }
 
         last_err = None
+        impersonates = ["chrome120", "chrome119", "safari15_5", "edge101"]
         for attempt in range(4):
             try:
+                imp = impersonates[attempt % len(impersonates)]
                 if self.session and not getattr(self.session, "closed", True):
                     try:
                         await self.session.close()
                     except Exception:
                         pass
-                self.session = AsyncSession(impersonate="chrome120")
+                self.session = AsyncSession(impersonate=imp)
 
                 # 1. Obtain fresh cookies from homepage
-                await self.session.get(f"https://{self.lang}.akinator.com/", headers=headers, timeout=10)
+                r_home = await self.session.get(f"https://{self.lang}.akinator.com/", headers=headers, timeout=10)
+                if r_home.status_code != 200:
+                    last_err = ValueError(f"Home HTTP {r_home.status_code}")
+                    continue
 
                 # 2. Initialize game session
                 url = f"https://{self.lang}.akinator.com/game"
                 r = await self.session.post(url, data={"sid": "1", "cm": "false"}, headers=headers, timeout=10)
+                if r.status_code != 200:
+                    last_err = ValueError(f"Game HTTP {r.status_code}")
+                    continue
+
                 text = r.text
 
                 sess_m = re.search(r"localStorage\.setItem\('session',\s*'([^']+)'\)", text) or \
@@ -117,7 +126,8 @@ class FastAkinator:
                     else:
                         last_err = ValueError(f"Empty fields: sess={bool(parsed_sess)}, id={bool(parsed_id)}, q={bool(parsed_q)}")
                 else:
-                    last_err = ValueError(f"Regex match failed: sess={bool(sess_m)}, id={bool(id_m)}, q={bool(q_m)}")
+                    logging.warning(f"Attempt {attempt+1} match fail. Snippet: {text[:200]}")
+                    last_err = ValueError(f"Regex fail: sess={bool(sess_m)}, id={bool(id_m)}, q={bool(q_m)}")
             except Exception as e:
                 last_err = e
                 logging.error(f"start_game attempt {attempt+1} error: {e}")
@@ -444,7 +454,7 @@ async def main():
             log_telemetry(client, user_name, user_id, chat_title, chat_id, "🎮 Started New Game", f"Q1: {q}")
         except Exception as e:
             logging.error(f"Error starting game: {e}")
-            await msg.edit(f"❌ Akinator servers are currently busy. Please type /eraaki again in a moment!", parse_mode="Markdown")
+            await msg.edit(f"❌ Akinator server error: `{e}`. Please type /eraaki again in a moment!", parse_mode="Markdown")
 
     @client.on(events.NewMessage(pattern=r"(?i)^/(stop|end|eraakistop)(@\w+)?$"))
     async def stop_handler(event):
