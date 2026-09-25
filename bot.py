@@ -336,7 +336,7 @@ async def start_web_server():
 
 async def main():
     # 1. Start web health check server FIRST so Render port scanner passes instantly!
-    asyncio.create_task(start_web_server())
+    await start_web_server()
 
     bot_token = os.getenv("BOT_TOKEN")
     if not bot_token and len(sys.argv) > 1:
