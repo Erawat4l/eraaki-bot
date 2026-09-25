@@ -3,8 +3,9 @@
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
 - Host-Locked Gameplay: Only the user who initiated /eraaki can click the buttons in group chats.
 - Public Visibility: Displays player's name and last selected answer to the entire group.
-- Credit Branding: Includes "Made with ❤️ by Erawat" credit on start & game messages.
-- Web Health Check: Lightweight HTTP server for Render Free Web Service ($0/mo).
+- Direct Question Display: Shows the active question directly when /eraaki is called during an ongoing game.
+- Credit Branding: "Made by Erawat"
+- Bot Description & Info set automatically on startup.
 """
 
 import os
@@ -19,6 +20,8 @@ from aiohttp import web
 from curl_cffi.requests import AsyncSession
 from telethon import TelegramClient, events, Button
 from telethon.errors import MessageNotModifiedError
+from telethon.tl.functions.bots import SetBotDescriptionRequest, SetBotInfoRequest, SetBotCommandsRequest
+from telethon.tl.types import BotCommand, BotCommandScopeDefault
 
 logging.basicConfig(level=logging.INFO)
 
@@ -34,7 +37,7 @@ ANSWER_LABELS = {
     "b": "⬅️ Back"
 }
 
-CREDIT_TEXT = "👑 *Made by Erawat*"
+CREDIT_TEXT = "Made by Erawat"
 
 class FastAkinator:
     def __init__(self, lang="en"):
@@ -211,10 +214,8 @@ async def main():
     # Start lightweight web server for Render Free Web Service
     asyncio.create_task(start_web_server())
 
-    # Register bot command menu autocomplete
+    # Register bot commands menu autocomplete & description
     try:
-        from telethon.tl.functions.bots import SetBotCommandsRequest
-        from telethon.tl.types import BotCommand, BotCommandScopeDefault
         await client(SetBotCommandsRequest(
             scope=BotCommandScopeDefault(),
             lang_code="en",
@@ -223,9 +224,17 @@ async def main():
                 BotCommand(command="eraakistop", description="🛑 Stop active Akinator game")
             ]
         ))
-        print("✓ Registered bot commands for auto-complete menu.")
+        await client(SetBotDescriptionRequest(
+            description="Official Akinator Telegram Bot made by Erawat. Play Akinator in group chats and DMs!",
+            lang_code="en"
+        ))
+        await client(SetBotInfoRequest(
+            about="Official Akinator Telegram Bot made by Erawat. Play Akinator in group chats and DMs!",
+            lang_code="en"
+        ))
+        print("✓ Registered bot description & command autocomplete menu.")
     except Exception as e:
-        logging.error(f"Failed to register bot commands menu: {e}")
+        logging.error(f"Notice setting bot description: {e}")
 
     print("⚡ Ultra-Fast Host-Locked Akinator Bot (@EraAki_Bot) started successfully!")
 
@@ -237,13 +246,14 @@ async def main():
         owner_name = sender.first_name if sender else "Game Host"
         owner_mention = f"[{owner_name}](tg://user?id={owner_id})"
 
+        # If a game is active, display the current active question directly with its buttons!
         if chat_id in games:
-            existing_game = games[chat_id]
-            restart_buttons = [
-                [Button.inline("🔄 Restart New Game", b"aki_force_restart")],
-                [Button.inline("🛑 Stop Game", b"aki_end")]
-            ]
-            await event.reply(f"🎮 A game initiated by {existing_game['owner_mention']} is already active in this chat!\nClick **Restart New Game** or /stop to start fresh.\n\n{CREDIT_TEXT}", parse_mode="Markdown", buttons=restart_buttons)
+            game = games[chat_id]
+            aki = game["aki"]
+            step_num = aki.step + 1
+            last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
+            text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {step_num}:* (Progress: {int(aki.progression)}%)\n{aki.question}\n\n{CREDIT_TEXT}"
+            await event.reply(text, parse_mode="Markdown", buttons=get_game_buttons())
             return
 
         msg = await event.reply(f"🔮 *Starting Akinator game for* {owner_mention}...\n\n{CREDIT_TEXT}", parse_mode="Markdown")
@@ -283,35 +293,6 @@ async def main():
     async def callback_handler(event):
         chat_id = event.chat_id
         action = event.data.decode().split("_")[1]
-
-        if action == "force":
-            if chat_id in games:
-                await games[chat_id]["aki"].close()
-                del games[chat_id]
-
-            sender = await event.get_sender()
-            owner_id = event.sender_id
-            owner_name = sender.first_name if sender else "Game Host"
-            owner_mention = f"[{owner_name}](tg://user?id={owner_id})"
-
-            await event.answer("Restarting new game...")
-            msg = await event.edit(f"🔮 *Starting new Akinator game for* {owner_mention}...\n\n{CREDIT_TEXT}", parse_mode="Markdown")
-
-            aki = FastAkinator()
-            try:
-                q = await aki.start_game()
-                games[chat_id] = {
-                    "aki": aki,
-                    "owner_id": owner_id,
-                    "owner_name": owner_name,
-                    "owner_mention": owner_mention,
-                    "last_ans": None
-                }
-                text = f"👤 *Player:* {owner_mention}\n❓ *Question 1:*\n{q}\n\n{CREDIT_TEXT}"
-                await msg.edit(text, parse_mode="Markdown", buttons=get_game_buttons())
-            except Exception as e:
-                await msg.edit(f"❌ Failed to start Akinator: {e}")
-            return
 
         if chat_id not in games:
             await event.answer("No active game in this chat. Type /eraaki!", alert=True)
