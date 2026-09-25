@@ -2,6 +2,7 @@
 """
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
 - Immediate Web Server Boot: Starts HTTP health check server instantly on container boot so Render deploys always succeed.
+- Non-Interactive Startup Safety: Validates BOT_TOKEN environment variable to prevent console hanging on cloud hosts.
 - Robust Entity Resolution: Guarantees full names and mentions for all group chat players (e.g. QUARTZ, Kush).
 - Strict Token Validation: Validates session, identifiant, and initial question extraction so broken sessions are never created.
 - Non-Blocking Background Telemetry Logging: Ships user choices and locations instantly without slowing button clicks.
@@ -338,9 +339,9 @@ async def main():
     # 1. Start web health check server FIRST so Render port scanner passes instantly!
     await start_web_server()
 
-    bot_token = os.getenv("BOT_TOKEN")
+    bot_token = os.getenv("BOT_TOKEN", "").strip()
     if not bot_token and len(sys.argv) > 1:
-        bot_token = sys.argv[1]
+        bot_token = sys.argv[1].strip()
 
     if not bot_token:
         print("Usage: BOT_TOKEN=your_token python3 bot.py OR python3 bot.py <BOT_TOKEN>")
