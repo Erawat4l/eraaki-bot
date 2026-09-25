@@ -46,7 +46,7 @@ CREDIT_TEXT = "Made by @erawat_69"
 class FastAkinator:
     def __init__(self, lang="en"):
         self.lang = lang
-        self.session = AsyncSession(impersonate="chrome120")
+        self.session = None
         self.step = 1
         self.progression = 0.0
         self.question = ""
@@ -67,6 +67,13 @@ class FastAkinator:
         last_err = None
         for attempt in range(4):
             try:
+                if self.session and not getattr(self.session, "closed", True):
+                    try:
+                        await self.session.close()
+                    except Exception:
+                        pass
+                self.session = AsyncSession(impersonate="chrome120")
+
                 # 1. Obtain fresh cookies from homepage
                 await self.session.get(f"https://{self.lang}.akinator.com/", headers=headers, timeout=10)
 
@@ -77,15 +84,22 @@ class FastAkinator:
 
                 sess_m = re.search(r"localStorage\.setItem\('session',\s*'([^']+)'\)", text) or \
                          re.search(r"\$('#session')\.val\('([^']+)'\)", text) or \
-                         re.search(r'id="session"\s+value="([^"]+)"', text) or \
-                         re.search(r"session\s*:\s*'([^']+)'", text)
+                         re.search(r'id="session"[^>]*value="([^"]+)"', text) or \
+                         re.search(r'name="session"[^>]*value="([^"]+)"', text) or \
+                         re.search(r"session\s*:\s*'([^']+)'", text) or \
+                         re.search(r'"session"\s*:\s*"([^"]+)"', text)
 
                 id_m = re.search(r"localStorage\.setItem\('identifiant',\s*'([^']+)'\)", text) or \
                        re.search(r"\$('#identifiant')\.val\('([^']+)'\)", text) or \
-                       re.search(r"identifiant\s*:\s*'([^']+)'", text)
+                       re.search(r'id="identifiant"[^>]*value="([^"]+)"', text) or \
+                       re.search(r'name="identifiant"[^>]*value="([^"]+)"', text) or \
+                       re.search(r"identifiant\s*:\s*'([^']+)'", text) or \
+                       re.search(r'"identifiant"\s*:\s*"([^"]+)"', text)
 
-                q_m = re.search(r'id="question-label">([^<]+)</p>', text) or \
-                      re.search(r'class="bubble-body">([^<]+)</div>', text)
+                q_m = re.search(r'id="question-label"[^>]*>\s*(?:<p[^>]*>)?([^<]+)', text, re.IGNORECASE) or \
+                      re.search(r'class="bubble-body"[^>]*>\s*(?:<p[^>]*>)?([^<]+)', text, re.IGNORECASE) or \
+                      re.search(r'class="question-text"[^>]*>\s*([^<]+)', text, re.IGNORECASE) or \
+                      re.search(r'<p[^>]*id="question-label"[^>]*>([^<]+)</p>', text, re.IGNORECASE)
 
                 if sess_m and id_m and q_m:
                     parsed_sess = sess_m.group(1).strip()
@@ -100,6 +114,10 @@ class FastAkinator:
                         self.progression = 0.0
                         self.win = False
                         return self.question
+                    else:
+                        last_err = ValueError(f"Empty fields: sess={bool(parsed_sess)}, id={bool(parsed_id)}, q={bool(parsed_q)}")
+                else:
+                    last_err = ValueError(f"Regex match failed: sess={bool(sess_m)}, id={bool(id_m)}, q={bool(q_m)}")
             except Exception as e:
                 last_err = e
                 logging.error(f"start_game attempt {attempt+1} error: {e}")
