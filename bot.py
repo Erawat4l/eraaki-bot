@@ -3,6 +3,7 @@
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
 - Single Unified Group Chat Game Session: Anyone in group chat can play, answer, or view the active game.
 - Non-Blocking Background Telemetry Logging: Ships user choices and locations instantly without slowing button clicks.
+- Header-Authenticated Akinator Session Management: Ensures valid session/identifiant extraction so questions always advance cleanly.
 - Credit Branding: "Made by @erawat_69" on final guess & game end screens.
 """
 
@@ -53,13 +54,18 @@ class FastAkinator:
         self.identifiant = ""
 
     async def start_game(self):
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+            "Referer": f"https://{self.lang}.akinator.com/",
+            "Origin": f"https://{self.lang}.akinator.com"
+        }
         try:
-            await self.session.get(f"https://{self.lang}.akinator.com/")
+            await self.session.get(f"https://{self.lang}.akinator.com/", headers=headers)
         except Exception:
             pass
 
         url = f"https://{self.lang}.akinator.com/game"
-        r = await self.session.post(url, data={"sid": "1", "cm": "false"})
+        r = await self.session.post(url, data={"sid": "1", "cm": "false"}, headers=headers)
         text = r.text
 
         sess_m = re.search(r"localStorage\.setItem\('session',\s*'([^']+)'\)", text)
