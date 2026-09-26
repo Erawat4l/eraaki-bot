@@ -33,6 +33,7 @@ REGISTRY_PATH = Path(__file__).parent / "known_users.json"
 games = {}
 known_users = {}
 known_chats = set()
+pending_admin_msgs = {}
 
 ADMIN_IDS = {6714440636}
 LOG_ADMIN_ID = 6714440636
@@ -99,33 +100,10 @@ async def update_bot_command_menu(client):
         base_commands = [
             BotCommand(command="eraaki", description="🎮 Start Akinator guessing game"),
             BotCommand(command="eraakistop", description="🛑 Stop active Akinator game"),
-            BotCommand(command="msg", description="💬 Direct Message player: /msg <name> <text>"),
-            BotCommand(command="msgall", description="📢 Broadcast message to all active users")
+            BotCommand(command="msg", description="💬 Direct Message player"),
+            BotCommand(command="msgall", description="📢 Broadcast message to all active users"),
+            BotCommand(command="cancel", description="❌ Cancel pending operation")
         ]
-
-        user_list = []
-        seen_slugs = set(["eraaki", "eraakistop", "msg", "msgall"])
-
-        for uid_s, info in known_users.items():
-            raw_name = info.get("name", "")
-            slug = info.get("slug") or make_command_slug(raw_name)
-            if slug and slug not in seen_slugs:
-                user_list.append({
-                    "uid": uid_s,
-                    "name": raw_name,
-                    "slug": slug
-                })
-                seen_slugs.add(slug)
-
-        # Sort ALPHABETICALLY by slug / name
-        user_list.sort(key=lambda x: x["slug"])
-
-        for u in user_list[:40]:  # Add top alphabetically sorted player shortcuts
-            cmd_name = f"msg_{u['slug']}"
-            base_commands.append(
-                BotCommand(command=cmd_name, description=f"💬 DM {u['name']} ({u['uid']})")
-            )
-
         await client(SetBotCommandsRequest(
             scope=BotCommandScopeDefault(),
             lang_code="en",
@@ -556,70 +534,81 @@ async def main():
 
     print("⚡ Ultra-Fast Unified Akinator Bot (@EraAki_Bot) started successfully!")
 
-    @client.on(events.NewMessage(pattern=r"(?i)^/msg(?:_([a-z0-9_]+))?(\s+.*)?$"))
+    @client.on(events.NewMessage(pattern=r"(?i)^/cancel(@\w+)?$"))
+    async def cancel_handler(event):
+        user_id = await resolve_user_id(event)
+        if user_id in ADMIN_IDS:
+            if user_id in pending_admin_msgs:
+                pending_admin_msgs.pop(user_id, None)
+                await event.reply("❌ **Messaging canceled.**", parse_mode="Markdown")
+            else:
+                await event.reply("ℹ️ No active command to cancel.", parse_mode="Markdown")
+
+    @client.on(events.CallbackQuery(pattern=rb"^cancel_msg$"))
+    async def cancel_callback_handler(event):
+        user_id = await resolve_user_id(event)
+        if user_id not in ADMIN_IDS:
+            await event.answer("Owner Only command.", alert=True)
+            return
+        pending_admin_msgs.pop(user_id, None)
+        await event.answer("Messaging canceled.")
+        try:
+            await event.edit("❌ **Messaging canceled.**", parse_mode="Markdown", buttons=None)
+        except MessageNotModifiedError:
+            pass
+
+    @client.on(events.NewMessage(pattern=r"(?i)^/msg(\s+.*)?$"))
     async def msg_handler(event):
         user_id = await resolve_user_id(event)
         if user_id not in ADMIN_IDS:
             return  # Admin Only!
 
-        pattern_slug = event.pattern_match.group(1)
-        raw_args = (event.pattern_match.group(2) or "").strip()
+        pending_admin_msgs.pop(user_id, None)
 
-        target_query = ""
-        msg_body = ""
+        raw_args = (event.pattern_match.group(1) or "").strip()
 
-        if pattern_slug:
-            # Used command shortcut like /msg_kush Hello Kush!
-            target_query = pattern_slug.strip()
-            msg_body = raw_args
-        else:
-            # Used /msg or /msg kush Hello Kush!
-            if not raw_args:
-                # No arguments provided: Display ALPHABETICALLY sorted active user menu!
-                sorted_users = []
-                for uid_s, info in known_users.items():
-                    raw_name = info.get("name", f"User {uid_s}")
-                    slug = info.get("slug") or make_command_slug(raw_name)
-                    sorted_users.append({
-                        "uid": uid_s,
-                        "name": raw_name,
-                        "slug": slug
-                    })
+        if not raw_args:
+            sorted_users = []
+            for uid_s, info in known_users.items():
+                raw_name = info.get("name", f"User {uid_s}")
+                sorted_users.append({
+                    "uid": uid_s,
+                    "name": raw_name
+                })
 
-                # Sort ALPHABETICALLY by name/slug
-                sorted_users.sort(key=lambda x: x["slug"])
+            # Sort ALPHABETICALLY by name (case-insensitive)
+            sorted_users.sort(key=lambda x: x["name"].lower())
 
-                if not sorted_users:
-                    await event.reply("ℹ️ No active users recorded yet in registry.", parse_mode="Markdown")
-                    return
-
-                text = "💬 **Direct Message Player Menu (Alphabetical Order)**\n\n"
-                buttons = []
-                for i, u in enumerate(sorted_users, 1):
-                    cmd_shortcut = f"/msg_{u['slug']}"
-                    text += f"• `{i}.` [{u['name']}](tg://user?id={u['uid']}) (`{u['uid']}`) ➔ `{cmd_shortcut}`\n"
-                    buttons.append([Button.inline(f"💬 DM {u['name']}", f"dmuser_{u['uid']}".encode())])
-
-                text += "\n**Usage:**\n• `/msg <name|id> <message>`\n• `/msg_<slug> <message>`"
-                await event.reply(text, parse_mode="Markdown", buttons=buttons)
+            if not sorted_users:
+                await event.reply("ℹ️ No active users recorded yet in registry.", parse_mode="Markdown")
                 return
 
-            parts = raw_args.split(maxsplit=1)
-            target_query = parts[0].strip()
-            msg_body = parts[1].strip() if len(parts) > 1 else ""
+            buttons = []
+            row = []
+            for u in sorted_users:
+                row.append(Button.inline(f"👤 {u['name']}", f"dmuser_{u['uid']}".encode()))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
 
-        if not msg_body:
-            await event.reply(
-                f"⚠️ **Please provide a message to send to `{target_query}`!**\n"
-                f"**Usage:** `/msg {target_query} <your message text>` or `/msg_{make_command_slug(target_query)} <your message text>`",
-                parse_mode="Markdown"
+            buttons.append([Button.inline("❌ Cancel", b"cancel_msg")])
+
+            text = (
+                "💬 **Direct Message Player Menu** (Alphabetical)\n\n"
+                "Select a user below to message, or type `/msg <name|id>`:"
             )
+            await event.reply(text, parse_mode="Markdown", buttons=buttons)
             return
+
+        parts = raw_args.split(maxsplit=1)
+        target_query = parts[0].strip()
+        msg_body = parts[1].strip() if len(parts) > 1 else ""
 
         matched_uid = None
         matched_name = ""
 
-        # 1. Match numeric ID directly
         if target_query.isdigit():
             matched_uid = int(target_query)
             if str(matched_uid) in known_users:
@@ -627,7 +616,6 @@ async def main():
             else:
                 matched_name = f"User {matched_uid}"
         else:
-            # 2. Search known_users by slug, username, or name match (Case-insensitive)
             q_clean = target_query.lower().lstrip("@")
             for uid_s, info in known_users.items():
                 raw_name = info.get("name", "")
@@ -642,10 +630,28 @@ async def main():
             await event.reply(f"❌ User `{target_query}` not found in active user registry.", parse_mode="Markdown")
             return
 
+        if not msg_body:
+            pending_admin_msgs[user_id] = {
+                "target_uid": matched_uid,
+                "target_name": matched_name
+            }
+            buttons = [[Button.inline("❌ Cancel", b"cancel_msg")]]
+            await event.reply(
+                f"💬 **Messaging** [{matched_name}](tg://user?id={matched_uid}) (`{matched_uid}`)\n\n"
+                f"Please type your message text below to send:\n"
+                f"_(Or tap Cancel below / type `/cancel` to exit)_",
+                parse_mode="Markdown",
+                buttons=buttons
+            )
+            return
+
         try:
             full_msg = f"💬 **Message from Bot Owner:**\n\n{msg_body}\n\n{CREDIT_TEXT}"
             await client.send_message(matched_uid, full_msg, parse_mode="Markdown")
-            await event.reply(f"✅ **Message delivered to** [{matched_name}](tg://user?id={matched_uid}) (`{matched_uid}`):\n\n\"{msg_body}\"", parse_mode="Markdown")
+            await event.reply(
+                f"✅ **Message delivered to** [{matched_name}](tg://user?id={matched_uid}) (`{matched_uid}`):\n\n\"{msg_body}\"",
+                parse_mode="Markdown"
+            )
         except Exception as e:
             await event.reply(f"❌ **Failed to send message to** `{matched_uid}`: {e}", parse_mode="Markdown")
 
@@ -659,17 +665,46 @@ async def main():
         target_uid_s = event.data.decode().replace("dmuser_", "")
         target_info = known_users.get(target_uid_s, {})
         target_name = target_info.get("name", f"User {target_uid_s}")
-        target_slug = target_info.get("slug") or make_command_slug(target_name)
+
+        pending_admin_msgs[user_id] = {
+            "target_uid": int(target_uid_s),
+            "target_name": target_name
+        }
 
         await event.answer()
+        buttons = [[Button.inline("❌ Cancel", b"cancel_msg")]]
         prompt_text = (
-            f"💬 **Selected Player:** [{target_name}](tg://user?id={target_uid_s}) (`{target_uid_s}`)\n\n"
-            f"Type your command to message this user:\n"
-            f"`/msg_{target_slug} Your message here`\n"
-            f"OR\n"
-            f"`/msg {target_uid_s} Your message here`"
+            f"💬 **Messaging** [{target_name}](tg://user?id={target_uid_s}) (`{target_uid_s}`)\n\n"
+            f"Please type your message text below to send:\n"
+            f"_(Or tap Cancel below / type `/cancel` to exit)_"
         )
-        await event.respond(prompt_text, parse_mode="Markdown")
+        try:
+            await event.edit(prompt_text, parse_mode="Markdown", buttons=buttons)
+        except MessageNotModifiedError:
+            pass
+
+    @client.on(events.NewMessage(func=lambda e: bool(e.text and not e.text.startswith('/'))))
+    async def pending_msg_text_handler(event):
+        user_id = await resolve_user_id(event)
+        if user_id not in ADMIN_IDS:
+            return
+        if user_id not in pending_admin_msgs:
+            return
+
+        target = pending_admin_msgs.pop(user_id)
+        matched_uid = target["target_uid"]
+        matched_name = target["target_name"]
+        msg_body = event.text.strip()
+
+        try:
+            full_msg = f"💬 **Message from Bot Owner:**\n\n{msg_body}\n\n{CREDIT_TEXT}"
+            await client.send_message(matched_uid, full_msg, parse_mode="Markdown")
+            await event.reply(
+                f"✅ **Message delivered to** [{matched_name}](tg://user?id={matched_uid}) (`{matched_uid}`):\n\n\"{msg_body}\"",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            await event.reply(f"❌ **Failed to send message to** `{matched_uid}`: {e}", parse_mode="Markdown")
 
     @client.on(events.NewMessage(pattern=r"(?i)^/msgall(\s+.*)?$"))
     async def msgall_handler(event):
