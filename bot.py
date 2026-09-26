@@ -2,10 +2,9 @@
 """
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
 - Immediate Web Server Boot: Starts HTTP health check server instantly on container boot so Render deploys always succeed.
-- Non-Interactive Startup Safety: Validates BOT_TOKEN environment variable to prevent console hanging on cloud hosts.
-- Robust Entity Resolution: Guarantees full names and mentions for all group chat players (e.g. QUARTZ, Kush).
-- Strict Token Validation: Validates session, identifiant, and initial question extraction so broken sessions are never created.
-- Non-Blocking Background Telemetry Logging: Ships user choices and locations instantly without slowing button clicks.
+- Owner Broadcast & Direct Messaging: Only Admin (6714440636) can use /msg <user> <text> and /msgall <text>.
+- Clickable Group Telemetry Links: Converts telemetry group titles into direct clickable t.me / invite links.
+- Non-Admin Speed Prompt: Prompts group chats to grant Admin permissions to @EraAki_Bot for maximum speed.
 - Credit Branding: "Made by @erawat_69" on final guess & game end screens.
 """
 
@@ -27,7 +26,11 @@ from telethon.tl.types import BotCommand, BotCommandScopeDefault
 logging.basicConfig(level=logging.INFO)
 
 CONFIG_PATH = Path.home() / ".config" / "tgdl" / "config.json"
+REGISTRY_PATH = Path.home() / "Projects" / "Akinator-Bot" / "known_users.json"
+
 games = {}
+known_users = {}
+known_chats = set()
 
 ADMIN_IDS = {6714440636}
 LOG_ADMIN_ID = 6714440636
@@ -42,6 +45,41 @@ ANSWER_LABELS = {
 }
 
 CREDIT_TEXT = "Made by @erawat_69"
+
+def load_registry():
+    global known_users, known_chats
+    if REGISTRY_PATH.exists():
+        try:
+            with open(REGISTRY_PATH, "r") as f:
+                data = json.load(f)
+                known_users = data.get("users", {})
+                known_chats = set(data.get("chats", []))
+        except Exception as e:
+            logging.error(f"Error loading registry: {e}")
+
+def save_registry():
+    try:
+        data = {
+            "users": known_users,
+            "chats": list(known_chats)
+        }
+        with open(REGISTRY_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        logging.error(f"Error saving registry: {e}")
+
+def register_activity(user_id, user_name, chat_id):
+    if not user_id:
+        return
+    uid_str = str(user_id)
+    known_users[uid_str] = {
+        "user_id": user_id,
+        "name": user_name,
+        "chat_id": chat_id
+    }
+    if chat_id:
+        known_chats.add(chat_id)
+    save_registry()
 
 class FastAkinator:
     def __init__(self, lang="en"):
@@ -80,6 +118,7 @@ class FastAkinator:
                 r_home = await self.session.get(f"https://{self.lang}.akinator.com/", headers=headers, timeout=10)
                 if r_home.status_code != 200:
                     last_err = ValueError(f"Home HTTP {r_home.status_code}")
+                    await asyncio.sleep(0.4)
                     continue
 
                 # 2. Initialize game session
@@ -87,6 +126,7 @@ class FastAkinator:
                 r = await self.session.post(url, data={"sid": "1", "cm": "false"}, headers=headers, timeout=10)
                 if r.status_code != 200:
                     last_err = ValueError(f"Game HTTP {r.status_code}")
+                    await asyncio.sleep(0.4)
                     continue
 
                 text = r.text
@@ -318,30 +358,67 @@ async def get_player_info(client, event, user_id):
     mention = f"[{name}](tg://user?id={user_id})"
     return name, mention
 
-async def get_chat_title(event):
+async def get_chat_location_formatted(client, event):
+    chat_id = event.chat_id
+    title = "Private DM" if event.is_private else f"Group {chat_id}"
+    link = ""
     try:
         chat = await event.get_chat()
         if getattr(chat, 'title', None):
-            return chat.title
+            title = chat.title
         elif getattr(chat, 'first_name', None):
             n = chat.first_name
             if getattr(chat, 'last_name', None):
                 n += f" {chat.last_name}"
-            return f"DM ({n})"
+            title = f"DM ({n})"
+
+        if getattr(chat, 'username', None) and chat.username:
+            link = f"https://t.me/{chat.username}"
+        elif not event.is_private:
+            if getattr(chat, 'invite_link', None) and chat.invite_link:
+                link = chat.invite_link
+            else:
+                try:
+                    from telethon.tl.functions.messages import ExportChatInviteRequest
+                    inv = await client(ExportChatInviteRequest(chat_id))
+                    if getattr(inv, 'link', None):
+                        link = inv.link
+                except Exception:
+                    pass
+                if not link:
+                    cid_str = str(chat_id).replace("-100", "")
+                    link = f"https://t.me/c/{cid_str}/1"
     except Exception:
         pass
-    return "Private DM" if event.is_private else f"Group {event.chat_id}"
 
-def log_telemetry(client, user_name, user_id, chat_title, chat_id, action_str, extra=""):
-    asyncio.create_task(_ship_telemetry(client, user_name, user_id, chat_title, chat_id, action_str, extra))
+    if link:
+        loc_str = f"[{title}]({link}) (`{chat_id}`)"
+    else:
+        loc_str = f"`{title}` (`{chat_id}`)"
+    return title, loc_str
 
-async def _ship_telemetry(client, user_name, user_id, chat_title, chat_id, action_str, extra=""):
-    logging.info(f"TELEMETRY: User={user_name} ({user_id}) | Location={chat_title} ({chat_id}) | Action={action_str} | Detail={extra}")
+async def check_admin_speed_prompt(client, chat_id, is_private):
+    if is_private:
+        return ""
+    try:
+        me = await client.get_me()
+        perms = await client.get_permissions(chat_id, me)
+        if not (getattr(perms, 'is_admin', False) or getattr(perms, 'is_creator', False)):
+            return "\n\n⚡ *Tip:* Promote @EraAki_Bot to **Admin** to improve speed and unlock group link export!"
+    except Exception:
+        pass
+    return ""
+
+def log_telemetry(client, user_name, user_id, chat_location_formatted, action_str, extra=""):
+    asyncio.create_task(_ship_telemetry(client, user_name, user_id, chat_location_formatted, action_str, extra))
+
+async def _ship_telemetry(client, user_name, user_id, chat_location_formatted, action_str, extra=""):
+    logging.info(f"TELEMETRY: User={user_name} ({user_id}) | Location={chat_location_formatted} | Action={action_str} | Detail={extra}")
     try:
         log_msg = (
             f"📊 **[EraAki Telemetry]**\n"
             f"👤 **User:** [{user_name}](tg://user?id={user_id}) (`{user_id}`)\n"
-            f"📍 **Location:** `{chat_title}` (`{chat_id}`)\n"
+            f"📍 **Location:** {chat_location_formatted}\n"
             f"🎯 **Action:** {action_str}"
         )
         if extra:
@@ -377,6 +454,8 @@ async def self_ping_loop():
         await asyncio.sleep(240)  # Self-ping every 4 minutes to permanently prevent Render free tier sleeping
 
 async def main():
+    load_registry()
+
     # 1. Start web health check server FIRST so Render port scanner passes instantly!
     await start_web_server()
 
@@ -416,7 +495,9 @@ async def main():
             lang_code="en",
             commands=[
                 BotCommand(command="eraaki", description="🎮 Start Akinator guessing game"),
-                BotCommand(command="eraakistop", description="🛑 Stop active Akinator game")
+                BotCommand(command="eraakistop", description="🛑 Stop active Akinator game"),
+                BotCommand(command="msg", description="💬 Send DM to player (Admin Only)"),
+                BotCommand(command="msgall", description="📢 Broadcast message (Admin Only)")
             ]
         ))
         await client(SetBotInfoRequest(
@@ -430,6 +511,108 @@ async def main():
 
     print("⚡ Ultra-Fast Unified Akinator Bot (@EraAki_Bot) started successfully!")
 
+    @client.on(events.NewMessage(pattern=r"(?i)^/msg(\s+.*)?$"))
+    async def msg_handler(event):
+        user_id = await resolve_user_id(event)
+        if user_id not in ADMIN_IDS:
+            return  # Admin Only!
+
+        text = event.text.strip()
+        parts = text.split(maxsplit=2)
+        if len(parts) < 3:
+            await event.reply(
+                "⚠️ **Usage:** `/msg <user_name|user_id> <message>`\n"
+                "**Examples:**\n"
+                "• `/msg kush Hey Kush, check this out!`\n"
+                "• `/msg 7844249814 Hello there!`",
+                parse_mode="Markdown"
+            )
+            return
+
+        target_query = parts[1].strip()
+        msg_body = parts[2].strip()
+
+        matched_uid = None
+        matched_name = ""
+
+        if target_query.isdigit():
+            matched_uid = int(target_query)
+            if str(matched_uid) in known_users:
+                matched_name = known_users[str(matched_uid)].get("name", f"User {matched_uid}")
+            else:
+                matched_name = f"User {matched_uid}"
+        else:
+            q_clean = target_query.lower().lstrip("@")
+            for uid_s, info in known_users.items():
+                uname = info.get("name", "").lower()
+                if q_clean in uname or q_clean == uid_s:
+                    matched_uid = int(uid_s)
+                    matched_name = info.get("name", target_query)
+                    break
+
+        if not matched_uid:
+            await event.reply(f"❌ User `{target_query}` not found in active user registry.", parse_mode="Markdown")
+            return
+
+        try:
+            full_msg = f"💬 **Message from Bot Owner:**\n\n{msg_body}\n\n{CREDIT_TEXT}"
+            await client.send_message(matched_uid, full_msg, parse_mode="Markdown")
+            await event.reply(f"✅ **Message delivered to** [{matched_name}](tg://user?id={matched_uid}) (`{matched_uid}`):\n\n\"{msg_body}\"", parse_mode="Markdown")
+        except Exception as e:
+            await event.reply(f"❌ **Failed to send message to** `{matched_uid}`: {e}", parse_mode="Markdown")
+
+    @client.on(events.NewMessage(pattern=r"(?i)^/msgall(\s+.*)?$"))
+    async def msgall_handler(event):
+        user_id = await resolve_user_id(event)
+        if user_id not in ADMIN_IDS:
+            return  # Admin Only!
+
+        text = event.text.strip()
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            await event.reply(
+                "⚠️ **Usage:** `/msgall <broadcast message>`\n"
+                "**Example:** `/msgall 🚀 New feature update live on Akinator Bot!`",
+                parse_mode="Markdown"
+            )
+            return
+
+        broadcast_text = parts[1].strip()
+        status_msg = await event.reply("📢 **Starting broadcast to all active users & chats...**", parse_mode="Markdown")
+
+        user_success = 0
+        user_fail = 0
+        chat_success = 0
+        chat_fail = 0
+
+        full_msg = f"📢 **Announcement from @EraAki_Bot Owner:**\n\n{broadcast_text}\n\n{CREDIT_TEXT}"
+
+        for uid_s in list(known_users.keys()):
+            try:
+                uid = int(uid_s)
+                await client.send_message(uid, full_msg, parse_mode="Markdown")
+                user_success += 1
+            except Exception:
+                user_fail += 1
+            await asyncio.sleep(0.05)
+
+        for cid in list(known_chats):
+            if cid in ADMIN_IDS:
+                continue
+            try:
+                await client.send_message(cid, full_msg, parse_mode="Markdown")
+                chat_success += 1
+            except Exception:
+                chat_fail += 1
+            await asyncio.sleep(0.05)
+
+        report = (
+            f"✅ **Broadcast Complete!**\n\n"
+            f"👤 **Users:** `{user_success}` success / `{user_fail}` failed\n"
+            f"👥 **Groups:** `{chat_success}` success / `{chat_fail}` failed"
+        )
+        await status_msg.edit(report, parse_mode="Markdown")
+
     @client.on(events.NewMessage(pattern=r"(?i)^/(eraaki|start)(@\w+)?$"))
     async def start_handler(event):
         chat_id = event.chat_id
@@ -437,7 +620,10 @@ async def main():
         game_key = chat_id if not event.is_private else user_id
 
         user_name, user_mention = await get_player_info(client, event, user_id)
-        chat_title = await get_chat_title(event)
+        register_activity(user_id, user_name, chat_id)
+
+        chat_title, chat_location_formatted = await get_chat_location_formatted(client, event)
+        admin_prompt = await check_admin_speed_prompt(client, chat_id, event.is_private)
 
         reply_buttons = get_game_buttons()
         if event.is_private:
@@ -448,9 +634,9 @@ async def main():
             game = games[game_key]
             aki = game["aki"]
             last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
-            text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{aki.question}"
+            text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{aki.question}{admin_prompt}"
             await event.reply(text, parse_mode="Markdown", buttons=reply_buttons)
-            log_telemetry(client, user_name, user_id, chat_title, chat_id, "🎮 Checked Active Game", f"Step {aki.step} ({int(aki.progression)}%)")
+            log_telemetry(client, user_name, user_id, chat_location_formatted, "🎮 Checked Active Game", f"Step {aki.step} ({int(aki.progression)}%)")
             return
 
         msg = await event.reply(f"🔮 *Starting Akinator game for* {user_mention}...", parse_mode="Markdown")
@@ -465,9 +651,9 @@ async def main():
                 "owner_mention": user_mention,
                 "last_ans": None
             }
-            text = f"👤 *Player:* {user_mention}\n❓ *Question 1:*\n{q}"
+            text = f"👤 *Player:* {user_mention}\n❓ *Question 1:*\n{q}{admin_prompt}"
             await msg.edit(text, parse_mode="Markdown", buttons=reply_buttons)
-            log_telemetry(client, user_name, user_id, chat_title, chat_id, "🎮 Started New Game", f"Q1: {q}")
+            log_telemetry(client, user_name, user_id, chat_location_formatted, "🎮 Started New Game", f"Q1: {q}")
         except Exception as e:
             logging.error(f"Error starting game: {e}")
             await msg.edit(f"❌ Akinator server error: `{e}`. Please type /eraaki again in a moment!", parse_mode="Markdown")
@@ -479,18 +665,18 @@ async def main():
         game_key = chat_id if not event.is_private else user_id
 
         user_name, user_mention = await get_player_info(client, event, user_id)
-        chat_title = await get_chat_title(event)
+        register_activity(user_id, user_name, chat_id)
 
-        # 1. Stop game for this chat
+        chat_title, chat_location_formatted = await get_chat_location_formatted(client, event)
+
         if game_key in games:
             game = games[game_key]
             await game["aki"].close()
             del games[game_key]
             await event.reply(f"🛑 Game stopped by {user_mention}!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
-            log_telemetry(client, user_name, user_id, chat_title, chat_id, "🛑 Stopped Active Game")
+            log_telemetry(client, user_name, user_id, chat_location_formatted, "🛑 Stopped Active Game")
             return
 
-        # 2. Otherwise notify sender
         await event.reply("No active game running in this chat. Type /eraaki to start one!", parse_mode="Markdown")
 
     @client.on(events.CallbackQuery(pattern=rb"^aki_"))
@@ -509,9 +695,11 @@ async def main():
         aki = game["aki"]
 
         user_name, user_mention = await get_player_info(client, event, user_id)
-        chat_title = await get_chat_title(event)
+        register_activity(user_id, user_name, chat_id)
 
-        # Update active player info to whoever clicked the button
+        chat_title, chat_location_formatted = await get_chat_location_formatted(client, event)
+        admin_prompt = await check_admin_speed_prompt(client, chat_id, event.is_private)
+
         game["owner_name"] = user_name
         game["owner_mention"] = user_mention
 
@@ -523,7 +711,7 @@ async def main():
                 await event.edit(f"🛑 Game ended by {user_mention}. Type /eraaki to start again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
             except MessageNotModifiedError:
                 pass
-            log_telemetry(client, user_name, user_id, chat_title, chat_id, "🛑 Ended Game via Button")
+            log_telemetry(client, user_name, user_id, chat_location_formatted, "🛑 Ended Game via Button")
             return
 
         await event.answer()
@@ -552,7 +740,7 @@ async def main():
 
                 text = f"👤 *Player:* {game['owner_mention']}\n🎉 *I think of:*\n\n🌟 **{name}**\n_{desc}_\n\n{CREDIT_TEXT}"
 
-                log_telemetry(client, user_name, user_id, chat_title, chat_id, f"🎉 Character Guess Made", f"Guess: {name} ({desc})")
+                log_telemetry(client, user_name, user_id, chat_location_formatted, f"🎉 Character Guess Made", f"Guess: {name} ({desc})")
 
                 if photo:
                     try:
@@ -565,9 +753,9 @@ async def main():
                 await event.edit(text, parse_mode="Markdown", buttons=guess_buttons)
             else:
                 last_ans_text = f" *(Selected: {game['last_ans']})*" if game["last_ans"] else ""
-                text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{q}"
+                text = f"👤 *Player:* {game['owner_mention']}{last_ans_text}\n❓ *Question {aki.step}:* (Progress: {int(aki.progression)}%)\n{q}{admin_prompt}"
                 await event.edit(text, parse_mode="Markdown", buttons=reply_buttons)
-                log_telemetry(client, user_name, user_id, chat_title, chat_id, f"Answered {action_text}", f"Next: Q{aki.step} ({int(aki.progression)}%) - {q}")
+                log_telemetry(client, user_name, user_id, chat_location_formatted, f"Answered {action_text}", f"Next: Q{aki.step} ({int(aki.progression)}%) - {q}")
 
         except MessageNotModifiedError:
             pass
@@ -588,7 +776,10 @@ async def main():
 
         game = games[game_key]
         user_name, user_mention = await get_player_info(client, event, user_id)
-        chat_title = await get_chat_title(event)
+        register_activity(user_id, user_name, chat_id)
+
+        chat_title, chat_location_formatted = await get_chat_location_formatted(client, event)
+        admin_prompt = await check_admin_speed_prompt(client, chat_id, event.is_private)
 
         game["owner_name"] = user_name
         game["owner_mention"] = user_mention
@@ -602,14 +793,14 @@ async def main():
             del games[game_key]
             await event.answer("Hooray! 🎉")
             await event.respond(f"🏆 *I guessed it right for {user_mention}!* Thanks for playing! Send /eraaki to play again!\n\n{CREDIT_TEXT}", parse_mode="Markdown")
-            log_telemetry(client, user_name, user_id, chat_title, chat_id, "🏆 Correct Guess Confirmed")
+            log_telemetry(client, user_name, user_id, chat_location_formatted, "🏆 Correct Guess Confirmed")
         else:
             aki = game["aki"]
             try:
                 q = await aki.answer("n")
-                text = f"👤 *Player:* {user_mention}\n🔄 Continuing game!\n❓ *Question {aki.step}:*\n{q}"
+                text = f"👤 *Player:* {user_mention}\n🔄 Continuing game!\n❓ *Question {aki.step}:*\n{q}{admin_prompt}"
                 await event.respond(text, parse_mode="Markdown", buttons=reply_buttons)
-                log_telemetry(client, user_name, user_id, chat_title, chat_id, "🔄 Rejected Guess, Continuing", f"Q{aki.step}: {q}")
+                log_telemetry(client, user_name, user_id, chat_location_formatted, "🔄 Rejected Guess, Continuing", f"Q{aki.step}: {q}")
             except Exception:
                 await aki.close()
                 del games[game_key]
