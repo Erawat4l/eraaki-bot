@@ -34,6 +34,7 @@ games = {}
 known_users = {}
 known_chats = set()
 pending_admin_msgs = {}
+pending_admin_broadcast = set()
 
 ADMIN_IDS = {6714440636}
 LOG_ADMIN_ID = 6714440636
@@ -538,9 +539,16 @@ async def main():
     async def cancel_handler(event):
         user_id = await resolve_user_id(event)
         if user_id in ADMIN_IDS:
+            canceled_any = False
             if user_id in pending_admin_msgs:
                 pending_admin_msgs.pop(user_id, None)
-                await event.reply("❌ **Messaging canceled.**", parse_mode="Markdown")
+                canceled_any = True
+            if user_id in pending_admin_broadcast:
+                pending_admin_broadcast.discard(user_id)
+                canceled_any = True
+
+            if canceled_any:
+                await event.reply("❌ **Operation canceled.**", parse_mode="Markdown")
             else:
                 await event.reply("ℹ️ No active command to cancel.", parse_mode="Markdown")
 
@@ -551,9 +559,10 @@ async def main():
             await event.answer("Owner Only command.", alert=True)
             return
         pending_admin_msgs.pop(user_id, None)
-        await event.answer("Messaging canceled.")
+        pending_admin_broadcast.discard(user_id)
+        await event.answer("Operation canceled.")
         try:
-            await event.edit("❌ **Messaging canceled.**", parse_mode="Markdown", buttons=None)
+            await event.edit("❌ **Operation canceled.**", parse_mode="Markdown", buttons=None)
         except MessageNotModifiedError:
             pass
 
@@ -564,6 +573,7 @@ async def main():
             return  # Admin Only!
 
         pending_admin_msgs.pop(user_id, None)
+        pending_admin_broadcast.discard(user_id)
 
         raw_args = (event.pattern_match.group(1) or "").strip()
 
@@ -662,6 +672,7 @@ async def main():
             await event.answer("Owner Only command.", alert=True)
             return
 
+        pending_admin_broadcast.discard(user_id)
         target_uid_s = event.data.decode().replace("dmuser_", "")
         target_info = known_users.get(target_uid_s, {})
         target_name = target_info.get("name", f"User {target_uid_s}")
@@ -683,46 +694,7 @@ async def main():
         except MessageNotModifiedError:
             pass
 
-    @client.on(events.NewMessage(func=lambda e: bool(e.text and not e.text.startswith('/'))))
-    async def pending_msg_text_handler(event):
-        user_id = await resolve_user_id(event)
-        if user_id not in ADMIN_IDS:
-            return
-        if user_id not in pending_admin_msgs:
-            return
-
-        target = pending_admin_msgs.pop(user_id)
-        matched_uid = target["target_uid"]
-        matched_name = target["target_name"]
-        msg_body = event.text.strip()
-
-        try:
-            full_msg = f"💬 **Message from Bot Owner:**\n\n{msg_body}\n\n{CREDIT_TEXT}"
-            await client.send_message(matched_uid, full_msg, parse_mode="Markdown")
-            await event.reply(
-                f"✅ **Message delivered to** [{matched_name}](tg://user?id={matched_uid}) (`{matched_uid}`):\n\n\"{msg_body}\"",
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            await event.reply(f"❌ **Failed to send message to** `{matched_uid}`: {e}", parse_mode="Markdown")
-
-    @client.on(events.NewMessage(pattern=r"(?i)^/msgall(\s+.*)?$"))
-    async def msgall_handler(event):
-        user_id = await resolve_user_id(event)
-        if user_id not in ADMIN_IDS:
-            return  # Admin Only!
-
-        text = event.text.strip()
-        parts = text.split(maxsplit=1)
-        if len(parts) < 2 or not parts[1].strip():
-            await event.reply(
-                "⚠️ **Usage:** `/msgall <broadcast message>`\n"
-                "**Example:** `/msgall 🚀 New feature update live on Akinator Bot!`",
-                parse_mode="Markdown"
-            )
-            return
-
-        broadcast_text = parts[1].strip()
+    async def do_broadcast(event, broadcast_text):
         status_msg = await event.reply("📢 **Starting broadcast to all active users & chats...**", parse_mode="Markdown")
 
         user_success = 0
@@ -757,6 +729,58 @@ async def main():
             f"👥 **Groups:** `{chat_success}` success / `{chat_fail}` failed"
         )
         await status_msg.edit(report, parse_mode="Markdown")
+
+    @client.on(events.NewMessage(func=lambda e: bool(e.text and not e.text.startswith('/'))))
+    async def pending_msg_text_handler(event):
+        user_id = await resolve_user_id(event)
+        if user_id not in ADMIN_IDS:
+            return
+
+        if user_id in pending_admin_broadcast:
+            pending_admin_broadcast.discard(user_id)
+            await do_broadcast(event, event.text.strip())
+            return
+
+        if user_id in pending_admin_msgs:
+            target = pending_admin_msgs.pop(user_id)
+            matched_uid = target["target_uid"]
+            matched_name = target["target_name"]
+            msg_body = event.text.strip()
+
+            try:
+                full_msg = f"💬 **Message from Bot Owner:**\n\n{msg_body}\n\n{CREDIT_TEXT}"
+                await client.send_message(matched_uid, full_msg, parse_mode="Markdown")
+                await event.reply(
+                    f"✅ **Message delivered to** [{matched_name}](tg://user?id={matched_uid}) (`{matched_uid}`):\n\n\"{msg_body}\"",
+                    parse_mode="Markdown"
+                )
+            except Exception as e:
+                await event.reply(f"❌ **Failed to send message to** `{matched_uid}`: {e}", parse_mode="Markdown")
+
+    @client.on(events.NewMessage(pattern=r"(?i)^/msgall(\s+.*)?$"))
+    async def msgall_handler(event):
+        user_id = await resolve_user_id(event)
+        if user_id not in ADMIN_IDS:
+            return  # Admin Only!
+
+        pending_admin_msgs.pop(user_id, None)
+        pending_admin_broadcast.discard(user_id)
+
+        raw_args = (event.pattern_match.group(1) or "").strip()
+
+        if not raw_args:
+            pending_admin_broadcast.add(user_id)
+            buttons = [[Button.inline("❌ Cancel", b"cancel_msg")]]
+            await event.reply(
+                "📢 **Broadcast Message to All Active Users & Groups**\n\n"
+                "Please type the broadcast message text below to send:\n"
+                "_(Or tap Cancel below / type `/cancel` to exit)_",
+                parse_mode="Markdown",
+                buttons=buttons
+            )
+            return
+
+        await do_broadcast(event, raw_args)
 
     @client.on(events.NewMessage(pattern=r"(?i)^/(eraaki|start)(@\w+)?$"))
     async def start_handler(event):
