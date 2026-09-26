@@ -66,7 +66,7 @@ class FastAkinator:
 
         last_err = None
         impersonates = ["chrome120", "chrome119", "safari15_5", "edge101"]
-        for attempt in range(4):
+        for attempt in range(6):
             try:
                 imp = impersonates[attempt % len(impersonates)]
                 if self.session and not getattr(self.session, "closed", True):
@@ -363,9 +363,25 @@ async def start_web_server():
     await site.start()
     print(f"✓ Health check web server active on port {port}")
 
+async def self_ping_loop():
+    await asyncio.sleep(15)
+    import aiohttp
+    url = "https://eraaki-bot.onrender.com/health"
+    while True:
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get(url, timeout=10) as r:
+                    logging.info(f"Keep-alive self-ping status: {r.status}")
+        except Exception as e:
+            logging.error(f"Keep-alive ping notice: {e}")
+        await asyncio.sleep(240)  # Self-ping every 4 minutes to permanently prevent Render free tier sleeping
+
 async def main():
     # 1. Start web health check server FIRST so Render port scanner passes instantly!
     await start_web_server()
+
+    # 2. Start self-ping keep-alive loop so Render container NEVER spins down/sleeps!
+    asyncio.create_task(self_ping_loop())
 
     bot_token = os.getenv("BOT_TOKEN", "").strip()
     if not bot_token and len(sys.argv) > 1:
