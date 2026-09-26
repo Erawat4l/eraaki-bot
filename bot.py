@@ -28,7 +28,7 @@ from telethon.tl.types import BotCommand, BotCommandScopeDefault
 logging.basicConfig(level=logging.INFO)
 
 CONFIG_PATH = Path.home() / ".config" / "tgdl" / "config.json"
-REGISTRY_PATH = Path.home() / "Projects" / "Akinator-Bot" / "known_users.json"
+REGISTRY_PATH = Path(__file__).parent / "known_users.json"
 
 games = {}
 known_users = {}
