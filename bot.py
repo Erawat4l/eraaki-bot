@@ -3,6 +3,7 @@
 Ultra-Fast Telegram Akinator Bot (@EraAki_Bot)
 - Immediate Web Server Boot: Starts HTTP health check server instantly on container boot so Render deploys always succeed.
 - Owner Broadcast & Direct Messaging: Only Admin (6714440636) can use /msg <user> <text> and /msgall <text>.
+- Alphabetical User Autocomplete: Dynamically populates Telegram command menu (/msg_erawat, /msg_kush, /msg_quartz...) sorted alphabetically.
 - Clickable Group Telemetry Links: Converts telemetry group titles into direct clickable t.me / invite links.
 - Non-Admin Speed Prompt: Prompts group chats to grant Admin permissions to @EraAki_Bot for maximum speed.
 - Credit Branding: "Made by @erawat_69" on final guess & game end screens.
@@ -15,6 +16,7 @@ import logging
 import asyncio
 import re
 import html
+import unicodedata
 from pathlib import Path
 from aiohttp import web
 from curl_cffi.requests import AsyncSession
@@ -46,6 +48,14 @@ ANSWER_LABELS = {
 
 CREDIT_TEXT = "Made by @erawat_69"
 
+def make_command_slug(name):
+    if not name:
+        return "user"
+    norm = unicodedata.normalize('NFKD', name)
+    slug = re.sub(r'[^a-zA-Z0-9]', '_', norm).strip('_').lower()
+    slug = re.sub(r'_+', '_', slug)
+    return slug[:20] if slug else "user"
+
 def load_registry():
     global known_users, known_chats
     if REGISTRY_PATH.exists():
@@ -68,18 +78,61 @@ def save_registry():
     except Exception as e:
         logging.error(f"Error saving registry: {e}")
 
-def register_activity(user_id, user_name, chat_id):
+def register_activity(user_id, user_name, chat_id, client=None):
     if not user_id:
         return
     uid_str = str(user_id)
     known_users[uid_str] = {
         "user_id": user_id,
         "name": user_name,
-        "chat_id": chat_id
+        "chat_id": chat_id,
+        "slug": make_command_slug(user_name)
     }
     if chat_id:
         known_chats.add(chat_id)
     save_registry()
+    if client:
+        asyncio.create_task(update_bot_command_menu(client))
+
+async def update_bot_command_menu(client):
+    try:
+        base_commands = [
+            BotCommand(command="eraaki", description="🎮 Start Akinator guessing game"),
+            BotCommand(command="eraakistop", description="🛑 Stop active Akinator game"),
+            BotCommand(command="msg", description="💬 Direct Message player: /msg <name> <text>"),
+            BotCommand(command="msgall", description="📢 Broadcast message to all active users")
+        ]
+
+        user_list = []
+        seen_slugs = set(["eraaki", "eraakistop", "msg", "msgall"])
+
+        for uid_s, info in known_users.items():
+            raw_name = info.get("name", "")
+            slug = info.get("slug") or make_command_slug(raw_name)
+            if slug and slug not in seen_slugs:
+                user_list.append({
+                    "uid": uid_s,
+                    "name": raw_name,
+                    "slug": slug
+                })
+                seen_slugs.add(slug)
+
+        # Sort ALPHABETICALLY by slug / name
+        user_list.sort(key=lambda x: x["slug"])
+
+        for u in user_list[:40]:  # Add top alphabetically sorted player shortcuts
+            cmd_name = f"msg_{u['slug']}"
+            base_commands.append(
+                BotCommand(command=cmd_name, description=f"💬 DM {u['name']} ({u['uid']})")
+            )
+
+        await client(SetBotCommandsRequest(
+            scope=BotCommandScopeDefault(),
+            lang_code="en",
+            commands=base_commands
+        ))
+    except Exception as e:
+        logging.error(f"Notice updating bot command menu: {e}")
 
 class FastAkinator:
     def __init__(self, lang="en"):
@@ -489,17 +542,9 @@ async def main():
     client = TelegramClient(str(session_path), api_id, api_hash)
     await client.start(bot_token=bot_token)
 
+    await update_bot_command_menu(client)
+
     try:
-        await client(SetBotCommandsRequest(
-            scope=BotCommandScopeDefault(),
-            lang_code="en",
-            commands=[
-                BotCommand(command="eraaki", description="🎮 Start Akinator guessing game"),
-                BotCommand(command="eraakistop", description="🛑 Stop active Akinator game"),
-                BotCommand(command="msg", description="💬 Send DM to player (Admin Only)"),
-                BotCommand(command="msgall", description="📢 Broadcast message (Admin Only)")
-            ]
-        ))
         await client(SetBotInfoRequest(
             about="Official Akinator Telegram Bot made by @erawat_69. Play Akinator in group chats and DMs!",
             description="Official Akinator Telegram Bot made by @erawat_69. Play Akinator in group chats and DMs!",
@@ -511,30 +556,70 @@ async def main():
 
     print("⚡ Ultra-Fast Unified Akinator Bot (@EraAki_Bot) started successfully!")
 
-    @client.on(events.NewMessage(pattern=r"(?i)^/msg(\s+.*)?$"))
+    @client.on(events.NewMessage(pattern=r"(?i)^/msg(?:_([a-z0-9_]+))?(\s+.*)?$"))
     async def msg_handler(event):
         user_id = await resolve_user_id(event)
         if user_id not in ADMIN_IDS:
             return  # Admin Only!
 
-        text = event.text.strip()
-        parts = text.split(maxsplit=2)
-        if len(parts) < 3:
+        pattern_slug = event.pattern_match.group(1)
+        raw_args = (event.pattern_match.group(2) or "").strip()
+
+        target_query = ""
+        msg_body = ""
+
+        if pattern_slug:
+            # Used command shortcut like /msg_kush Hello Kush!
+            target_query = pattern_slug.strip()
+            msg_body = raw_args
+        else:
+            # Used /msg or /msg kush Hello Kush!
+            if not raw_args:
+                # No arguments provided: Display ALPHABETICALLY sorted active user menu!
+                sorted_users = []
+                for uid_s, info in known_users.items():
+                    raw_name = info.get("name", f"User {uid_s}")
+                    slug = info.get("slug") or make_command_slug(raw_name)
+                    sorted_users.append({
+                        "uid": uid_s,
+                        "name": raw_name,
+                        "slug": slug
+                    })
+
+                # Sort ALPHABETICALLY by name/slug
+                sorted_users.sort(key=lambda x: x["slug"])
+
+                if not sorted_users:
+                    await event.reply("ℹ️ No active users recorded yet in registry.", parse_mode="Markdown")
+                    return
+
+                text = "💬 **Direct Message Player Menu (Alphabetical Order)**\n\n"
+                buttons = []
+                for i, u in enumerate(sorted_users, 1):
+                    cmd_shortcut = f"/msg_{u['slug']}"
+                    text += f"• `{i}.` [{u['name']}](tg://user?id={u['uid']}) (`{u['uid']}`) ➔ `{cmd_shortcut}`\n"
+                    buttons.append([Button.inline(f"💬 DM {u['name']}", f"dmuser_{u['uid']}".encode())])
+
+                text += "\n**Usage:**\n• `/msg <name|id> <message>`\n• `/msg_<slug> <message>`"
+                await event.reply(text, parse_mode="Markdown", buttons=buttons)
+                return
+
+            parts = raw_args.split(maxsplit=1)
+            target_query = parts[0].strip()
+            msg_body = parts[1].strip() if len(parts) > 1 else ""
+
+        if not msg_body:
             await event.reply(
-                "⚠️ **Usage:** `/msg <user_name|user_id> <message>`\n"
-                "**Examples:**\n"
-                "• `/msg kush Hey Kush, check this out!`\n"
-                "• `/msg 7844249814 Hello there!`",
+                f"⚠️ **Please provide a message to send to `{target_query}`!**\n"
+                f"**Usage:** `/msg {target_query} <your message text>` or `/msg_{make_command_slug(target_query)} <your message text>`",
                 parse_mode="Markdown"
             )
             return
 
-        target_query = parts[1].strip()
-        msg_body = parts[2].strip()
-
         matched_uid = None
         matched_name = ""
 
+        # 1. Match numeric ID directly
         if target_query.isdigit():
             matched_uid = int(target_query)
             if str(matched_uid) in known_users:
@@ -542,12 +627,15 @@ async def main():
             else:
                 matched_name = f"User {matched_uid}"
         else:
+            # 2. Search known_users by slug, username, or name match (Case-insensitive)
             q_clean = target_query.lower().lstrip("@")
             for uid_s, info in known_users.items():
-                uname = info.get("name", "").lower()
-                if q_clean in uname or q_clean == uid_s:
+                raw_name = info.get("name", "")
+                slug = info.get("slug") or make_command_slug(raw_name)
+                uname = raw_name.lower()
+                if q_clean == slug or q_clean in uname or q_clean == uid_s:
                     matched_uid = int(uid_s)
-                    matched_name = info.get("name", target_query)
+                    matched_name = raw_name
                     break
 
         if not matched_uid:
@@ -560,6 +648,28 @@ async def main():
             await event.reply(f"✅ **Message delivered to** [{matched_name}](tg://user?id={matched_uid}) (`{matched_uid}`):\n\n\"{msg_body}\"", parse_mode="Markdown")
         except Exception as e:
             await event.reply(f"❌ **Failed to send message to** `{matched_uid}`: {e}", parse_mode="Markdown")
+
+    @client.on(events.CallbackQuery(pattern=rb"^dmuser_"))
+    async def dm_user_callback(event):
+        user_id = await resolve_user_id(event)
+        if user_id not in ADMIN_IDS:
+            await event.answer("Owner Only command.", alert=True)
+            return
+
+        target_uid_s = event.data.decode().replace("dmuser_", "")
+        target_info = known_users.get(target_uid_s, {})
+        target_name = target_info.get("name", f"User {target_uid_s}")
+        target_slug = target_info.get("slug") or make_command_slug(target_name)
+
+        await event.answer()
+        prompt_text = (
+            f"💬 **Selected Player:** [{target_name}](tg://user?id={target_uid_s}) (`{target_uid_s}`)\n\n"
+            f"Type your command to message this user:\n"
+            f"`/msg_{target_slug} Your message here`\n"
+            f"OR\n"
+            f"`/msg {target_uid_s} Your message here`"
+        )
+        await event.respond(prompt_text, parse_mode="Markdown")
 
     @client.on(events.NewMessage(pattern=r"(?i)^/msgall(\s+.*)?$"))
     async def msgall_handler(event):
@@ -620,7 +730,7 @@ async def main():
         game_key = chat_id if not event.is_private else user_id
 
         user_name, user_mention = await get_player_info(client, event, user_id)
-        register_activity(user_id, user_name, chat_id)
+        register_activity(user_id, user_name, chat_id, client=client)
 
         chat_title, chat_location_formatted = await get_chat_location_formatted(client, event)
         admin_prompt = await check_admin_speed_prompt(client, chat_id, event.is_private)
@@ -665,7 +775,7 @@ async def main():
         game_key = chat_id if not event.is_private else user_id
 
         user_name, user_mention = await get_player_info(client, event, user_id)
-        register_activity(user_id, user_name, chat_id)
+        register_activity(user_id, user_name, chat_id, client=client)
 
         chat_title, chat_location_formatted = await get_chat_location_formatted(client, event)
 
@@ -695,7 +805,7 @@ async def main():
         aki = game["aki"]
 
         user_name, user_mention = await get_player_info(client, event, user_id)
-        register_activity(user_id, user_name, chat_id)
+        register_activity(user_id, user_name, chat_id, client=client)
 
         chat_title, chat_location_formatted = await get_chat_location_formatted(client, event)
         admin_prompt = await check_admin_speed_prompt(client, chat_id, event.is_private)
@@ -776,7 +886,7 @@ async def main():
 
         game = games[game_key]
         user_name, user_mention = await get_player_info(client, event, user_id)
-        register_activity(user_id, user_name, chat_id)
+        register_activity(user_id, user_name, chat_id, client=client)
 
         chat_title, chat_location_formatted = await get_chat_location_formatted(client, event)
         admin_prompt = await check_admin_speed_prompt(client, chat_id, event.is_private)
